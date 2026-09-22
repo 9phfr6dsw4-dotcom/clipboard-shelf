@@ -69,22 +69,21 @@ struct ClipboardHistory: Equatable {
 
     private mutating func normalize() {
         var seenTexts = Set<String>()
-        entries = entries
-            .sorted(by: Self.sortEntries)
+        entries = entries.enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.isPinned != rhs.element.isPinned {
+                    return lhs.element.isPinned && !rhs.element.isPinned
+                }
+                if lhs.element.createdAt != rhs.element.createdAt {
+                    return lhs.element.createdAt > rhs.element.createdAt
+                }
+                return lhs.offset > rhs.offset
+            }
+            .map(\.element)
             .filter { seenTexts.insert($0.text).inserted }
 
         let pinned = entries.filter(\.isPinned)
         let recent = entries.filter { !$0.isPinned }.prefix(maxRecentItems)
         entries = pinned + recent
-    }
-
-    private static func sortEntries(_ lhs: ClipboardEntry, _ rhs: ClipboardEntry) -> Bool {
-        if lhs.isPinned != rhs.isPinned {
-            return lhs.isPinned && !rhs.isPinned
-        }
-        if lhs.createdAt != rhs.createdAt {
-            return lhs.createdAt > rhs.createdAt
-        }
-        return lhs.id.uuidString < rhs.id.uuidString
     }
 }
