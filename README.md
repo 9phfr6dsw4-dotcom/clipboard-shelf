@@ -9,6 +9,7 @@ Clipboard Shelf is a private, native macOS menu-bar app that keeps a searchable 
 - Searches copied text instantly and without case sensitivity.
 - Copies an item back to the clipboard with one click.
 - Clears recent items while preserving pins.
+- Skips clipboard items marked concealed, transient, auto-generated, or by known password-manager pasteboard types.
 - Saves everything locally in macOS `UserDefaults`; it has no networking or analytics.
 - Runs only in the menu bar, without a Dock icon.
 - Supports Apple silicon and Intel Macs running macOS 13 or newer.

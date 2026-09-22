@@ -330,6 +330,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != pasteboardChangeCount else { return }
         pasteboardChangeCount = pasteboard.changeCount
+
+        let types = Set(pasteboard.types?.map { $0.rawValue } ?? [])
+        if ClipboardPrivacy.shouldSkip(types: types) {
+            pasteboardChangeCount = pasteboard.changeCount
+            return
+        }
+
         guard let text = pasteboard.string(forType: .string) else { return }
 
         history.record(text)

@@ -51,6 +51,18 @@ private func testSearchIsCaseInsensitiveAndPinFirst() {
     expect(results.map(\.text) == ["Project ALPHA", "alpha checklist"], "search should ignore case and show pinned matches first")
 }
 
+private func testSensitivePasteboardTypesAreSkipped() {
+    for type in ClipboardPrivacy.skipTypes {
+        expect(ClipboardPrivacy.shouldSkip(types: [type]), "pasteboard type \(type) should be skipped")
+    }
+
+    expect(!ClipboardPrivacy.shouldSkip(types: ["public.utf8-plain-text"]), "ordinary text should not be skipped")
+    expect(
+        ClipboardPrivacy.shouldSkip(types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"]),
+        "ordinary text with a concealed marker should be skipped"
+    )
+}
+
 private func testClearRecentKeepsPinsAndArchiveRoundTrips() throws {
     var history = ClipboardHistory(maxRecentItems: 20)
     history.record("Keep me", at: Date(timeIntervalSince1970: 1))
@@ -72,6 +84,7 @@ struct CoreTestRunner {
         testRecordingIgnoresBlankTextAndDeduplicates()
         testRecentLimitDoesNotEvictPinnedItems()
         testSearchIsCaseInsensitiveAndPinFirst()
+        testSensitivePasteboardTypesAreSkipped()
         do {
             try testClearRecentKeepsPinsAndArchiveRoundTrips()
         } catch {
