@@ -40,6 +40,9 @@ ARCHS="$(lipo -archs "$MACOS_DIR/ClipboardShelf")"
 [[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]]
 
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$DIST_DIR/Clipboard-Shelf-$VERSION.zip"
-shasum -a 256 "$DIST_DIR/Clipboard-Shelf-$VERSION.zip" > "$DIST_DIR/Clipboard-Shelf-$VERSION.zip.sha256"
+(
+  cd "$DIST_DIR"
+  shasum -a 256 "Clipboard-Shelf-$VERSION.zip" > "Clipboard-Shelf-$VERSION.zip.sha256"
+)
 
 printf 'Built %s\n' "$DIST_DIR/Clipboard-Shelf-$VERSION.zip"
