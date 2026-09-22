@@ -1,0 +1,12 @@
+# Build output
+.build/
+dist/
+*.app/
+*.zip
+
+# macOS
+.DS_Store
+
+# Local editor files
+.vscode/
+.idea/
