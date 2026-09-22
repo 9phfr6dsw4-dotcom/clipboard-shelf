@@ -6,6 +6,7 @@ protocol ClipboardShelfViewControllerDelegate: AnyObject {
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, copy entry: ClipboardEntry)
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, togglePin entry: ClipboardEntry)
     func clipboardShelfViewControllerClearRecent(_ controller: ClipboardShelfViewController)
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecordingPaused paused: Bool)
     func clipboardShelfViewControllerQuit(_ controller: ClipboardShelfViewController)
 }
 
@@ -94,10 +95,12 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
     private let tableView = NSTableView()
     private let countLabel = NSTextField(labelWithString: "")
     private let emptyLabel = NSTextField(labelWithString: "Copy some text to begin")
+    private let pauseButton = NSButton(checkboxWithTitle: "Pause recording", target: nil, action: nil)
     private let clearButton = NSButton(title: "Clear Recent", target: nil, action: nil)
     private let quitButton = NSButton(title: "Quit", target: nil, action: nil)
     private var history = ClipboardHistory()
     private var displayedEntries: [ClipboardEntry] = []
+    private var isRecordingPaused = false
 
     override func loadView() {
         let background = NSVisualEffectView()
@@ -125,6 +128,12 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.setAccessibilityLabel("Search clipboard history")
+
+        pauseButton.controlSize = .small
+        pauseButton.target = self
+        pauseButton.action = #selector(pauseRecordingClicked)
+        pauseButton.setAccessibilityLabel("Pause clipboard recording")
+        pauseButton.translatesAutoresizingMaskIntoConstraints = false
 
         clearButton.bezelStyle = .inline
         clearButton.controlSize = .small
@@ -170,7 +179,7 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
         quitButton.action = #selector(quitClicked)
         quitButton.translatesAutoresizingMaskIntoConstraints = false
 
-        for subview in [titleLabel, privacyLabel, searchField, clearButton, scrollView, emptyLabel, countLabel, quitButton] {
+        for subview in [titleLabel, privacyLabel, pauseButton, searchField, clearButton, scrollView, emptyLabel, countLabel, quitButton] {
             view.addSubview(subview)
         }
 
@@ -184,9 +193,12 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
             clearButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             clearButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
 
+            pauseButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            pauseButton.topAnchor.constraint(equalTo: privacyLabel.bottomAnchor, constant: 8),
+
             searchField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             searchField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            searchField.topAnchor.constraint(equalTo: privacyLabel.bottomAnchor, constant: 12),
+            searchField.topAnchor.constraint(equalTo: pauseButton.bottomAnchor, constant: 8),
 
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
@@ -206,9 +218,18 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
         refreshDisplayedEntries()
     }
 
-    func update(history: ClipboardHistory) {
+    func update(history: ClipboardHistory, recordingPaused: Bool) {
         self.history = history
+        updateRecordingPaused(recordingPaused)
         refreshDisplayedEntries()
+    }
+
+    func updateRecordingPaused(_ paused: Bool) {
+        isRecordingPaused = paused
+        pauseButton.state = paused ? .on : .off
+        pauseButton.title = paused ? "Recording paused — click to resume" : "Pause recording"
+        pauseButton.contentTintColor = paused ? .systemOrange : .controlAccentColor
+        pauseButton.setAccessibilityLabel(paused ? "Recording paused; click to resume" : "Pause clipboard recording")
     }
 
     func focusSearch() {
@@ -242,6 +263,10 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
         delegate?.clipboardShelfViewController(self, togglePin: displayedEntries[sender.tag])
     }
 
+    @objc private func pauseRecordingClicked() {
+        delegate?.clipboardShelfViewController(self, setRecordingPaused: pauseButton.state == .on)
+    }
+
     @objc private func clearRecentClicked() {
         delegate?.clipboardShelfViewControllerClearRecent(self)
     }
@@ -269,12 +294,14 @@ final class ClipboardShelfViewController: NSViewController, NSTableViewDataSourc
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewControllerDelegate {
     private let defaultsKey = "ClipboardShelfHistoryV1"
+    private let pausedKey = "ClipboardShelfRecordingPausedV1"
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var shelfController: ClipboardShelfViewController!
     private var history = ClipboardHistory(maxRecentItems: 20)
     private var monitorTimer: Timer?
     private var pasteboardChangeCount = 0
+    private var isRecordingPaused = false
 
     nonisolated override init() {
         super.init()
@@ -283,11 +310,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         loadHistory()
+        isRecordingPaused = UserDefaults.standard.bool(forKey: pausedKey)
 
         shelfController = ClipboardShelfViewController()
         popover = NSPopover()
         shelfController.delegate = self
-        shelfController.update(history: history)
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
         popover.behavior = .transient
         popover.animates = true
         popover.contentSize = NSSize(width: 430, height: 500)
@@ -295,14 +323,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard Shelf")
-            image?.isTemplate = true
-            button.image = image
-            button.toolTip = "Clipboard Shelf"
             button.target = self
             button.action = #selector(togglePopover(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
+        updateStatusItemAppearance()
 
         let pasteboard = NSPasteboard.general
         pasteboardChangeCount = pasteboard.changeCount
@@ -316,12 +341,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         saveHistory()
     }
 
+    private func updateStatusItemAppearance() {
+        guard let button = statusItem.button else { return }
+        let imageName = isRecordingPaused ? "pause.circle.fill" : "clipboard"
+        let description = isRecordingPaused ? "Clipboard Shelf — recording paused" : "Clipboard Shelf"
+        let image = NSImage(systemSymbolName: imageName, accessibilityDescription: description)
+        image?.isTemplate = true
+        button.image = image
+        button.toolTip = description
+    }
+
     @objc private func togglePopover(_ sender: NSStatusBarButton) {
         if popover.isShown {
             popover.performClose(sender)
             return
         }
-        shelfController.update(history: history)
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -331,8 +366,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         guard pasteboard.changeCount != pasteboardChangeCount else { return }
         pasteboardChangeCount = pasteboard.changeCount
 
+        guard !isRecordingPaused else { return }
+
         let types = Set(pasteboard.types?.map { $0.rawValue } ?? [])
-        if ClipboardPrivacy.shouldSkip(types: types) {
+        let frontmostBundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if ClipboardPrivacy.shouldSkip(
+            types: types,
+            frontmostBundleIdentifier: frontmostBundleIdentifier
+        ) {
             pasteboardChangeCount = pasteboard.changeCount
             return
         }
@@ -341,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
 
         history.record(text)
         saveHistory()
-        shelfController.update(history: history)
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
     }
 
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, copy entry: ClipboardEntry) {
@@ -352,14 +393,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
 
         history.record(entry.text)
         saveHistory()
-        shelfController.update(history: history)
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
         popover.performClose(nil)
     }
 
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, togglePin entry: ClipboardEntry) {
         history.togglePin(id: entry.id)
         saveHistory()
-        shelfController.update(history: history)
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
     }
 
     func clipboardShelfViewControllerClearRecent(_ controller: ClipboardShelfViewController) {
@@ -376,7 +417,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
 
         history.clearRecent()
         saveHistory()
-        shelfController.update(history: history)
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
+    }
+
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecordingPaused paused: Bool) {
+        isRecordingPaused = paused
+        UserDefaults.standard.set(paused, forKey: pausedKey)
+        updateStatusItemAppearance()
+        shelfController.updateRecordingPaused(paused)
     }
 
     func clipboardShelfViewControllerQuit(_ controller: ClipboardShelfViewController) {
@@ -412,6 +460,23 @@ private func runSelfTest() -> Int32 {
     }
     guard Bundle.main.url(forResource: "AppIcon", withExtension: "icns") != nil else {
         fputs("Self-test failed: app icon resource\n", stderr)
+        return 1
+    }
+    guard ClipboardPrivacy.shouldSkip(
+        types: ["org.nspasteboard.ConcealedType"],
+        frontmostBundleIdentifier: nil
+    ) else {
+        fputs("Self-test failed: concealed pasteboard type\n", stderr)
+        return 1
+    }
+    guard ClipboardPrivacy.shouldSkip(
+        types: [],
+        frontmostBundleIdentifier: "com.apple.Passwords"
+    ) && ClipboardPrivacy.shouldSkip(
+        types: [],
+        frontmostBundleIdentifier: "com.apple.keychainaccess"
+    ) else {
+        fputs("Self-test failed: password app bundle identifiers\n", stderr)
         return 1
     }
     print("Clipboard Shelf bundle self-test passed.")

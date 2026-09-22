@@ -9,8 +9,17 @@ enum ClipboardPrivacy {
         "de.petermaurer.TransientPasteboardType"
     ]
 
-    static func shouldSkip(types: Set<String>) -> Bool {
-        !types.isDisjoint(with: skipTypes)
+    static let passwordAppBundleIdentifiers: Set<String> = [
+        "com.apple.Passwords",
+        "com.apple.keychainaccess"
+    ]
+
+    static func shouldSkip(types: Set<String>, frontmostBundleIdentifier: String?) -> Bool {
+        if !types.isDisjoint(with: skipTypes) {
+            return true
+        }
+        guard let frontmostBundleIdentifier else { return false }
+        return passwordAppBundleIdentifiers.contains(frontmostBundleIdentifier)
     }
 }
 

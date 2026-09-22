@@ -51,15 +51,36 @@ private func testSearchIsCaseInsensitiveAndPinFirst() {
     expect(results.map(\.text) == ["Project ALPHA", "alpha checklist"], "search should ignore case and show pinned matches first")
 }
 
-private func testSensitivePasteboardTypesAreSkipped() {
+private func testSensitiveClipboardSourcesAreSkipped() {
     for type in ClipboardPrivacy.skipTypes {
-        expect(ClipboardPrivacy.shouldSkip(types: [type]), "pasteboard type \(type) should be skipped")
+        expect(
+            ClipboardPrivacy.shouldSkip(types: [type], frontmostBundleIdentifier: nil),
+            "pasteboard type \(type) should be skipped"
+        )
     }
 
-    expect(!ClipboardPrivacy.shouldSkip(types: ["public.utf8-plain-text"]), "ordinary text should not be skipped")
     expect(
-        ClipboardPrivacy.shouldSkip(types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"]),
+        !ClipboardPrivacy.shouldSkip(types: ["public.utf8-plain-text"], frontmostBundleIdentifier: nil),
+        "ordinary text should not be skipped"
+    )
+    expect(
+        ClipboardPrivacy.shouldSkip(
+            types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"],
+            frontmostBundleIdentifier: nil
+        ),
         "ordinary text with a concealed marker should be skipped"
+    )
+    expect(
+        ClipboardPrivacy.shouldSkip(types: [], frontmostBundleIdentifier: "com.apple.Passwords"),
+        "Passwords app copies should be skipped"
+    )
+    expect(
+        ClipboardPrivacy.shouldSkip(types: [], frontmostBundleIdentifier: "com.apple.keychainaccess"),
+        "Keychain Access copies should be skipped"
+    )
+    expect(
+        !ClipboardPrivacy.shouldSkip(types: [], frontmostBundleIdentifier: "com.apple.TextEdit"),
+        "ordinary app copies should not be skipped by bundle ID"
     )
 }
 
@@ -84,7 +105,7 @@ struct CoreTestRunner {
         testRecordingIgnoresBlankTextAndDeduplicates()
         testRecentLimitDoesNotEvictPinnedItems()
         testSearchIsCaseInsensitiveAndPinFirst()
-        testSensitivePasteboardTypesAreSkipped()
+        testSensitiveClipboardSourcesAreSkipped()
         do {
             try testClearRecentKeepsPinsAndArchiveRoundTrips()
         } catch {

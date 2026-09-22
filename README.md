@@ -10,6 +10,8 @@ Clipboard Shelf is a private, native macOS menu-bar app that keeps a searchable 
 - Copies an item back to the clipboard with one click.
 - Clears recent items while preserving pins.
 - Skips clipboard items marked concealed, transient, auto-generated, or by known password-manager pasteboard types.
+- Skips copies made while Apple's Passwords (`com.apple.Passwords`) or Keychain Access (`com.apple.keychainaccess`) is frontmost.
+- Includes a persistent **Pause recording** toggle for temporarily disabling all clipboard recording.
 - Saves everything locally in macOS `UserDefaults`; it has no networking or analytics.
 - Runs only in the menu bar, without a Dock icon.
 - Supports Apple silicon and Intel Macs running macOS 13 or newer.

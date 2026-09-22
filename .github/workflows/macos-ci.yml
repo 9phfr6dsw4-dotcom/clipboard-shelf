@@ -19,8 +19,12 @@ jobs:
 
       - name: Verify password app bundle identifiers on macOS
         run: |
-          printf 'Passwords=%s\n' "$(osascript -e 'id of app "Passwords"')"
-          printf 'Keychain Access=%s\n' "$(osascript -e 'id of app "Keychain Access"')"
+          passwords_id="$(osascript -e 'id of app "Passwords"')"
+          keychain_id="$(osascript -e 'id of app "Keychain Access"')"
+          printf 'Passwords=%s\n' "$passwords_id"
+          printf 'Keychain Access=%s\n' "$keychain_id"
+          test "$passwords_id" = "com.apple.Passwords"
+          test "$keychain_id" = "com.apple.keychainaccess"
 
       - name: Run Swift core tests
         run: bash Scripts/test.sh
