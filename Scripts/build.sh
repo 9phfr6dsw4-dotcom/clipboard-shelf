@@ -36,7 +36,8 @@ plutil -lint "$CONTENTS/Info.plist"
 codesign --force --deep --sign - --timestamp=none "$APP"
 codesign --verify --deep --strict "$APP"
 "$MACOS_DIR/ClipboardShelf" --self-test
-lipo -verify_arch arm64 x86_64 "$MACOS_DIR/ClipboardShelf"
+ARCHS="$(lipo -archs "$MACOS_DIR/ClipboardShelf")"
+[[ " $ARCHS " == *" arm64 "* && " $ARCHS " == *" x86_64 "* ]]
 
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$DIST_DIR/Clipboard-Shelf-$VERSION.zip"
 shasum -a 256 "$DIST_DIR/Clipboard-Shelf-$VERSION.zip" > "$DIST_DIR/Clipboard-Shelf-$VERSION.zip.sha256"
