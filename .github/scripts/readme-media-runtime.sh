@@ -1,6 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+set_appearance() {
+  local requested="${1:-}" expected actual
+  case "$requested" in
+    true) expected=dark ;;
+    false) expected=light ;;
+    *) printf 'Appearance must be true or false; got: %s\n' "$requested" >&2; return 2 ;;
+  esac
+
+  if ! actual="$(osascript - "$requested" <<'APPLESCRIPT'
+on run argv
+  set requestedMode to item 1 of argv
+  if requestedMode is "true" then
+    set expectedDarkMode to true
+  else if requestedMode is "false" then
+    set expectedDarkMode to false
+  else
+    error "Invalid requested appearance mode."
+  end if
+  tell application "System Events"
+    tell appearance preferences
+      set dark mode to expectedDarkMode
+      delay 2
+      if dark mode is not expectedDarkMode then error "Appearance preference did not take effect."
+      if dark mode then
+        return "dark"
+      else
+        return "light"
+      end if
+    end tell
+  end tell
+end run
+APPLESCRIPT
+)"; then
+    printf 'Could not set and verify appearance dark=%s.\n' "$requested" >&2
+    return 1
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'Appearance verification failed: requested=%s actual=%s.\n' "$expected" "$actual" >&2
+    return 1
+  fi
+}
+
 duration_is_acceptable() {
   local duration="${1:-}"
   [[ "$duration" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
@@ -120,10 +162,10 @@ tell application "System Events"
 end tell
 APPLESCRIPT
       for demo_file in \
-        "$HOME/Downloads/Atlas-project-brief.pdf" \
-        "$HOME/Downloads/Atlas-review-notes.md" \
-        "$HOME/Downloads/Atlas-timeline.xlsx" \
-        "$HOME/Downloads/Atlas-copy-draft.docx"; do
+        "${DEMO_DOWNLOADS}/Atlas-project-brief.pdf" \
+        "${DEMO_DOWNLOADS}/Atlas-review-notes.md" \
+        "${DEMO_DOWNLOADS}/Atlas-timeline.xlsx" \
+        "${DEMO_DOWNLOADS}/Atlas-copy-draft.docx"; do
         [[ -f "$demo_file" ]] || { printf 'Undo failed to restore synthetic demo file: %s\n' "$demo_file" >&2; return 1; }
       done
       show_menu_popover
