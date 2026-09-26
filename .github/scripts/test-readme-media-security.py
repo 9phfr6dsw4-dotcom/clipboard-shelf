@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/readme-media.yml"
+MACOS_CI = ROOT / ".github/workflows/macos-ci.yml"
 CAPTURE = ROOT / ".github/scripts/capture-readme-media.sh"
 
 
@@ -16,9 +17,35 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         cls.capture = CAPTURE.read_text(encoding="utf-8")
         cls.runtime = (ROOT / ".github/scripts/readme-media-runtime.sh").read_text(encoding="utf-8")
 
+    def test_capture_checkout_does_not_persist_credentials(self) -> None:
+        self.assertIn(
+            "      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false",
+            self.workflow,
+        )
+
+    def test_pr_validation_runs_media_tests_without_capture_or_release_secrets(self) -> None:
+        self.assertIn("  pull_request:\n", MACOS_CI.read_text(encoding="utf-8"))
+        macos_ci = MACOS_CI.read_text(encoding="utf-8")
+        self.assertIn("  readme-media-safety:\n", macos_ci)
+        self.assertIn(
+            "      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false",
+            macos_ci,
+        )
+        for command in (
+            "bash .github/scripts/test-readme-media-runtime.sh",
+            "python3 .github/scripts/test-readme-media-artifacts.py",
+            "python3 .github/scripts/test-readme-media-security.py",
+            "python3 .github/scripts/test-readme-media-demo.py",
+        ):
+            self.assertIn(command, macos_ci)
+        self.assertNotIn("capture-readme-media.sh", macos_ci)
+        self.assertNotIn("GH_TOKEN", macos_ci)
+        self.assertNotIn("gh release download", macos_ci)
+
     def test_capture_job_is_dispatch_only_on_trusted_main(self) -> None:
         trigger = self.workflow.split("permissions:", maxsplit=1)[0]
         self.assertEqual(trigger, "name: README media\n\non:\n  workflow_dispatch:\n\n")
+        self.assertIn("permissions:\n  contents: read", self.workflow)
         self.assertIn("if: github.event_name == 'workflow_dispatch' && github.repository == '9phfr6dsw4-dotcom/clipboard-shelf' && github.ref == 'refs/heads/main'", self.workflow)
 
     def test_github_token_is_scoped_to_release_download_before_application_launch(self) -> None:
