@@ -33,6 +33,8 @@ case "$APP_KEY" in
   *) printf 'Unknown APP_KEY: %s\n' "$APP_KEY" >&2; exit 2 ;;
 esac
 
+STATUS_LABEL="$APP_NAME"
+
 case "$APP_KEY" in
   clipboard-shelf) SLUG='clipboard-shelf' ;;
   quick-drop-zone) SLUG='quick-drop-zone' ;;
@@ -96,9 +98,10 @@ set_appearance() {
 
 show_menu_popover() {
   if menu_geometry >/dev/null 2>&1; then return 0; fi
-  osascript - "$WINDOW_OWNER" <<'APPLESCRIPT' || return 1
+  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" <<'APPLESCRIPT' || return 1
 on run argv
   set appName to item 1 of argv
+  set statusLabel to item 2 of argv
   tell application "System Events"
     tell process appName
       set frontmost to true
@@ -114,7 +117,7 @@ on run argv
           try
             set itemDescription to description of candidate as text
           end try
-          if itemName contains appName or itemDescription contains appName then
+          if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
             set statusItem to candidate
             set matches to matches + 1
           end if
@@ -131,7 +134,7 @@ on run argv
             try
               set itemDescription to description of candidate as text
             end try
-            if itemName contains appName or itemDescription contains appName then
+            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
               set statusItem to candidate
               set matches to matches + 1
             end if
@@ -154,9 +157,10 @@ APPLESCRIPT
 }
 
 menu_geometry() {
-  osascript - "$WINDOW_OWNER" <<'APPLESCRIPT'
+  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" <<'APPLESCRIPT'
 on run argv
   set appName to item 1 of argv
+  set statusLabel to item 2 of argv
   tell application "System Events"
     tell process appName
       set statusItem to missing value
@@ -171,7 +175,7 @@ on run argv
           try
             set itemDescription to description of candidate as text
           end try
-          if itemName contains appName or itemDescription contains appName then
+          if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
             set statusItem to candidate
             set matches to matches + 1
           end if
@@ -188,7 +192,7 @@ on run argv
             try
               set itemDescription to description of candidate as text
             end try
-            if itemName contains appName or itemDescription contains appName then
+            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
               set statusItem to candidate
               set matches to matches + 1
             end if
