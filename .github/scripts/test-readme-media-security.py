@@ -139,7 +139,14 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertIn('open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"', self.capture)
         self.assertIn('"$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist"', self.capture)
         macos_ci = MACOS_CI.read_text(encoding="utf-8")
-        self.assertIn('CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard', macos_ci)
+        prefs_dir = 'mkdir -p "$demo_home/Library/Preferences"'
+        seed_command = 'CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard'
+        verify_command = 'CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift verify-clipboard-demo'
+        self.assertIn(prefs_dir, macos_ci)
+        self.assertLess(macos_ci.index(prefs_dir), macos_ci.index(seed_command))
+        self.assertLess(macos_ci.index(prefs_dir), macos_ci.index(verify_command))
+        self.assertIn(seed_command, macos_ci)
+        self.assertIn(verify_command, macos_ci)
         self.assertIn('test -s "$demo_home/Library/Preferences/local.clipboardshelf.plist"', macos_ci)
         launch = (ROOT / "Sources/main.swift").read_text(encoding="utf-8")
         pasteboard_check = launch.split("@objc private func checkPasteboard()", 1)[1].split("func clipboardShelfViewController", 1)[0]
