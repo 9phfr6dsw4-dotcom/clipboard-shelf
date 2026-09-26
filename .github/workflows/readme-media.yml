@@ -8,14 +8,19 @@ permissions:
 
 jobs:
   capture:
+    if: github.event_name == 'workflow_dispatch' && github.repository == '9phfr6dsw4-dotcom/clipboard-shelf' && github.ref == 'refs/heads/main'
     runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Test README media safety and format checks
         run: |
           bash .github/scripts/test-readme-media-runtime.sh
           python3 .github/scripts/test-readme-media-artifacts.py
+          python3 .github/scripts/test-readme-media-security.py
+          python3 .github/scripts/test-readme-media-demo.py
       - name: Capture the published release app and prepare README media
         env:
           APP_KEY: clipboard-shelf

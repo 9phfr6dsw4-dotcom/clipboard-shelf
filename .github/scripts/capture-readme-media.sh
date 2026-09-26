@@ -3,6 +3,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$ROOT"
 APP_KEY="${APP_KEY:?APP_KEY is required}"
+RELEASE_TOKEN="${GH_TOKEN:?GH_TOKEN is required}"
+export -n RELEASE_TOKEN
+unset GH_TOKEN
 HELPER="$ROOT/.github/scripts/render-readme-media.swift"
 
 case "$APP_KEY" in
@@ -49,7 +52,6 @@ fi
 mkdir -p "$ROOT/docs/images"
 IMAGE_DIR_REAL="$(cd "$ROOT/docs/images" && pwd -P)"
 [[ "$IMAGE_DIR_REAL" == "$ROOT/docs/images" ]] || { printf 'README media directory escaped the worktree.\n' >&2; exit 1; }
-rm -f "$ROOT/docs/images/$SLUG-light.png" "$ROOT/docs/images/$SLUG-dark.png" "$ROOT/docs/images/$SLUG-hero.gif" "$ROOT/docs/images/social-preview.png"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 [[ "$RUNNER_TEMP" == /* ]] || { printf 'RUNNER_TEMP must be an absolute path.\n' >&2; exit 2; }
 ARTIFACT_DIR="$RUNNER_TEMP/readme-media"
@@ -59,6 +61,7 @@ for runner_child in "$EXTRACT_DIR" "$RUNNER_TEMP/release-download"; do
   [[ ! -L "$runner_child" ]] || { printf 'Refusing symlinked RUNNER_TEMP child: %s\n' "$runner_child" >&2; exit 1; }
 done
 mkdir -p "$EXTRACT_DIR" "$RUNNER_TEMP/release-download"
+rm -f "$ROOT/docs/images/$SLUG-light.png" "$ROOT/docs/images/$SLUG-dark.png" "$ROOT/docs/images/$SLUG-hero.gif" "$ROOT/docs/images/social-preview.png"
 
 printf '%s\n' '=== Display configuration ==='
 system_profiler SPDisplaysDataType 2>&1 | tee "$ARTIFACT_DIR/display-info.txt"
@@ -73,7 +76,8 @@ osascript -e 'tell application "Terminal" to close every window' >/dev/null 2>&1
 
 printf 'Downloading latest published release from %s.\n' "$RELEASE_REPO"
 mkdir -p "$RUNNER_TEMP/release-download"
-gh release download --repo "$RELEASE_REPO" --pattern '*.zip' --dir "$RUNNER_TEMP/release-download"
+GH_TOKEN="$RELEASE_TOKEN" gh release download --repo "$RELEASE_REPO" --pattern '*.zip' --dir "$RUNNER_TEMP/release-download"
+unset RELEASE_TOKEN GH_TOKEN
 ZIP_PATH="$(python3 - "$RUNNER_TEMP/release-download" <<'PY'
 from pathlib import Path
 import sys
@@ -89,12 +93,6 @@ test -d "$APP"
 xattr -dr com.apple.quarantine "$APP" >/dev/null 2>&1 || true
 ICON="$ROOT/docs/images/$SLUG-icon.png"
 test -s "$ICON"
-
-set_appearance() {
-  local dark="$1"
-  osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $dark" || printf 'Could not switch appearance to dark=%s; retaining the runner theme.\n' "$dark"
-  sleep 2
-}
 
 show_menu_popover() {
   if menu_geometry >/dev/null 2>&1; then return 0; fi
@@ -338,23 +336,23 @@ prepare_clipboard_demo() {
   swift "$HELPER" seed-clipboard
 }
 
+DEMO_DOWNLOADS=''
+
 prepare_quick_drop_demo() {
-  mkdir -p "$HOME/Downloads"
-  printf 'Sample project brief for a fictional Atlas workspace.\n' > "$HOME/Downloads/Atlas-project-brief.pdf"
-  printf 'Review notes for the fictional Atlas workspace.\n' > "$HOME/Downloads/Atlas-review-notes.md"
-  printf 'Timeline data for the fictional Atlas workspace.\n' > "$HOME/Downloads/Atlas-timeline.xlsx"
-  printf 'Draft copy for the fictional Atlas workspace.\n' > "$HOME/Downloads/Atlas-copy-draft.docx"
-  printf 'Sample team agenda.\n' > "$HOME/Downloads/Team-agenda-2026-08.docx"
-  printf 'Receipt sample.\n' > "$HOME/Downloads/invoice-2026-08.pdf"
-  printf 'Archive sample.\n' > "$HOME/Downloads/holiday-photos.zip"
-  printf 'Image sample.\n' > "$HOME/Downloads/Screenshot 2026-09-20 at 10.14.03.png"
-  cp "$RUNNER_TEMP/readme-wallpaper.png" "$HOME/Downloads/Screenshot 2026-09-20 at 10.14.03.png"
-  printf 'Meeting notes sample.\n' > "$HOME/Downloads/meeting-notes.md"
-  printf 'Design draft sample.\n' > "$HOME/Downloads/brand-board.sketch"
-  printf 'Installer sample.\n' > "$HOME/Downloads/Sample Studio.dmg"
-  printf 'Temporary export sample.\n' > "$HOME/Downloads/export-final-2.csv"
-  sudo mkdir -p '/Applications/Sample Studio.app/Contents'
-  printf 'Synthetic demo app marker.\n' | sudo tee '/Applications/Sample Studio.app/Contents/Info.plist' >/dev/null
+  DEMO_DOWNLOADS="$(python3 "$ROOT/.github/scripts/prepare-readme-media-demo.py" "$RUNNER_TEMP" "$RUNNER_TEMP/readme-wallpaper.png")"
+  [[ "$DEMO_DOWNLOADS" == "$RUNNER_TEMP"/readme-demo-*/Downloads && -d "$DEMO_DOWNLOADS" && ! -L "$DEMO_DOWNLOADS" ]] || {
+    printf 'Demo fixtures escaped RUNNER_TEMP or are unavailable.\n' >&2
+    return 1
+  }
+}
+
+launch_app() {
+  if [[ "$APP_KEY" == quick-drop-zone ]]; then
+    [[ -n "$DEMO_DOWNLOADS" ]] || { printf 'Quick Drop demo fixtures are not prepared.\n' >&2; return 1; }
+    open --env "HOME=${DEMO_DOWNLOADS%/Downloads}" "$APP"
+  else
+    open "$APP"
+  fi
 }
 
 open_cleanup_review() {
@@ -432,7 +430,7 @@ case "$APP_KEY" in
     ;;
   quick-drop-zone)
     prepare_quick_drop_demo
-    open "$APP"
+    launch_app
     sleep 5
     set_appearance false
     show_menu_popover

@@ -68,4 +68,31 @@ if duration_is_acceptable invalid; then
   exit 1
 fi
 
-printf '%s\n' 'PASS: video crop and duration validation cases'
+mock_appearance_result=light
+mock_osascript_status=0
+osascript() {
+  if (( mock_osascript_status != 0 )); then return "$mock_osascript_status"; fi
+  printf '%s' "$mock_appearance_result"
+}
+sleep() { :; }
+if ! set_appearance false; then
+  printf '%s\n' 'FAIL: accept verified light appearance' >&2
+  exit 1
+fi
+mock_appearance_result=dark
+if ! set_appearance true; then
+  printf '%s\n' 'FAIL: accept verified dark appearance' >&2
+  exit 1
+fi
+mock_appearance_result=light
+if set_appearance true >/dev/null 2>&1; then
+  printf '%s\n' 'FAIL: reject appearance mismatch' >&2
+  exit 1
+fi
+mock_osascript_status=1
+if set_appearance false >/dev/null 2>&1; then
+  printf '%s\n' 'FAIL: fail closed when AppleScript cannot set appearance' >&2
+  exit 1
+fi
+
+printf '%s\n' 'PASS: video crop, duration, and appearance validation cases'
