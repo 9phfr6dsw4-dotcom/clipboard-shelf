@@ -1,0 +1,35 @@
+name: README media
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test README media safety and format checks
+        run: |
+          bash .github/scripts/test-readme-media-runtime.sh
+          python3 .github/scripts/test-readme-media-artifacts.py
+      - name: Capture the published release app and prepare README media
+        env:
+          APP_KEY: clipboard-shelf
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/capture-readme-media.sh
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: clipboard-shelf-readme-media
+          path: |
+            docs/images/clipboard-shelf-light.png
+            docs/images/clipboard-shelf-dark.png
+            docs/images/clipboard-shelf-hero.gif
+            docs/images/social-preview.png
+            ${{ runner.temp }}/readme-media/*
+          if-no-files-found: warn
+          retention-days: 14
