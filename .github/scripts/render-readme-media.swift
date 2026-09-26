@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CryptoKit
 import Foundation
 
 struct MediaError: Error, CustomStringConvertible {
@@ -164,7 +165,30 @@ func makeProfileSocial(_ output: String, _ iconPaths: [String]) throws {
     }
 }
 
-func seedClipboard() throws {
+// The Clipboard Shelf demo fixture is passed to the launched app only through
+// NSArgumentDomain launch arguments. cfprefsd ignores HOME/CFFIXED_USER_HOME
+// (and __CFPREFERENCES_AVOID_DAEMON) on the GitHub macOS 15/26 runners and
+// persists any CFPreferences write in the real user's domain, so the fixture
+// must never be written to preferences.
+let clipboardDemoFixture: [(text: String, isPinned: Bool)] = [
+    ("func normalize(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }", true),
+    ("https://swift.org/documentation/", true),
+    ("Planning notes — outline, first draft, review, final copy", false),
+    ("Build succeeded on macOS 26 · checks ready", false),
+    ("Release checklist: tests, package, checksum, publish", false),
+    ("Meet at the north entrance at 10:30", false),
+    ("🌿 Small steps, clear notes, and a little patience.", false),
+    ("git status --short", false)
+]
+
+// Must match readme-media-defaults-probe.swift, which reports what the launched bundle reads.
+func clipboardDemoSummary(paused: Bool, entries: [(text: String, isPinned: Bool)]) -> String {
+    let lines = entries.map { "\($0.isPinned ? 1 : 0)\t\($0.text)" }.sorted().joined(separator: "\n")
+    let digest = SHA256.hash(data: Data(lines.utf8)).map { String(format: "%02x", $0) }.joined()
+    return "paused=\(paused) entries=\(entries.count) pinned=\(entries.filter(\.isPinned).count) sha256=\(digest)"
+}
+
+func printClipboardDemoArguments() throws {
     struct Entry: Encodable {
         let id: UUID
         let text: String
@@ -172,51 +196,16 @@ func seedClipboard() throws {
         let createdAt: Date
     }
     let now = Date()
-    let entries = [
-        Entry(id: UUID(), text: "func normalize(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }", isPinned: true, createdAt: now.addingTimeInterval(-300)),
-        Entry(id: UUID(), text: "https://swift.org/documentation/", isPinned: true, createdAt: now.addingTimeInterval(-900)),
-        Entry(id: UUID(), text: "Planning notes — outline, first draft, review, final copy", isPinned: false, createdAt: now.addingTimeInterval(-1500)),
-        Entry(id: UUID(), text: "Build succeeded on macOS 26 · checks ready", isPinned: false, createdAt: now.addingTimeInterval(-2100)),
-        Entry(id: UUID(), text: "Release checklist: tests, package, checksum, publish", isPinned: false, createdAt: now.addingTimeInterval(-2700)),
-        Entry(id: UUID(), text: "Meet at the north entrance at 10:30", isPinned: false, createdAt: now.addingTimeInterval(-3300)),
-        Entry(id: UUID(), text: "🌿 Small steps, clear notes, and a little patience.", isPinned: false, createdAt: now.addingTimeInterval(-3900)),
-        Entry(id: UUID(), text: "git status --short", isPinned: false, createdAt: now.addingTimeInterval(-4500))
-    ]
+    let entries = clipboardDemoFixture.enumerated().map { index, item in
+        Entry(id: UUID(), text: item.text, isPinned: item.isPinned, createdAt: now.addingTimeInterval(-300 - Double(index) * 600))
+    }
     let data = try JSONEncoder().encode(entries)
-    let domain = "local.clipboardshelf" as CFString
-    CFPreferencesSetAppValue("ClipboardShelfHistoryV1" as CFString, data as CFPropertyList, domain)
-    CFPreferencesSetAppValue("ClipboardShelfRecordingPausedV1" as CFString, true as CFPropertyList, domain)
-    guard CFPreferencesAppSynchronize(domain) else {
-        throw MediaError(description: "Could not synchronize synthetic clipboard history")
-    }
-}
-
-func verifyClipboardDemo() throws {
-    struct Entry: Decodable {
-        let text: String
-        let isPinned: Bool
-    }
-    let domain = "local.clipboardshelf" as CFString
-    guard CFPreferencesCopyAppValue("ClipboardShelfRecordingPausedV1" as CFString, domain) as? Bool == true,
-          let data = CFPreferencesCopyAppValue("ClipboardShelfHistoryV1" as CFString, domain) as? Data else {
-        throw MediaError(description: "Synthetic clipboard demo preferences are unavailable or not paused")
-    }
-    let entries = try JSONDecoder().decode([Entry].self, from: data)
-    let expectedTexts: Set<String> = [
-        "func normalize(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }",
-        "https://swift.org/documentation/",
-        "Planning notes — outline, first draft, review, final copy",
-        "Build succeeded on macOS 26 · checks ready",
-        "Release checklist: tests, package, checksum, publish",
-        "Meet at the north entrance at 10:30",
-        "🌿 Small steps, clear notes, and a little patience.",
-        "git status --short"
-    ]
-    guard entries.count == expectedTexts.count, Set(entries.map(\.text)) == expectedTexts,
-          entries.filter(\.isPinned).count == 2 else {
-        throw MediaError(description: "Clipboard demo state is not the exact synthetic fixture")
-    }
-    print("Verified exact synthetic clipboard fixture with recording paused")
+    // OpenStep property-list data literal, which NSUserDefaults parses from argv into NSData.
+    let literal = "<" + data.map { String(format: "%02x", $0) }.joined() + ">"
+    print("-ClipboardShelfHistoryV1")
+    print(literal)
+    print("-ClipboardShelfRecordingPausedV1")
+    print("YES")
 }
 
 func seedEchoType() throws {
@@ -292,20 +281,24 @@ func printWindowsForPID(_ pid: Int32) throws {
     guard let rows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
         throw MediaError(description: "Could not enumerate on-screen windows")
     }
-    print("windowID\tPID\tlayer\talpha\tx\ty\twidth\theight")
+    // Every row owned by the PID must be complete; a partial inventory could make one
+    // observed candidate look unique, so a malformed row fails the whole enumeration.
+    var lines = ["windowID\tPID\tlayer\talpha\tx\ty\twidth\theight"]
     for row in rows {
-        guard let ownerPID = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
-              ownerPID == pid,
-              let id = row[kCGWindowNumber as String] as? CGWindowID,
+        guard (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid else { continue }
+        guard let id = row[kCGWindowNumber as String] as? CGWindowID,
+              let layer = (row[kCGWindowLayer as String] as? NSNumber)?.intValue,
+              let alpha = (row[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
               let bounds = row[kCGWindowBounds as String] as? [String: Any],
               let x = (bounds["X"] as? NSNumber)?.doubleValue,
               let y = (bounds["Y"] as? NSNumber)?.doubleValue,
               let width = (bounds["Width"] as? NSNumber)?.doubleValue,
-              let height = (bounds["Height"] as? NSNumber)?.doubleValue else { continue }
-        let layer = row[kCGWindowLayer as String] as? Int ?? -1
-        let alpha = row[kCGWindowAlpha as String] as? Double ?? 0
-        print("\(id)\t\(ownerPID)\t\(layer)\t\(alpha)\t\(Int(x))\t\(Int(y))\t\(Int(width))\t\(Int(height))")
+              let height = (bounds["Height"] as? NSNumber)?.doubleValue else {
+            throw MediaError(description: "Incomplete window record for PID \(pid)")
+        }
+        lines.append("\(id)\t\(pid)\t\(layer)\t\(alpha)\t\(Int(x))\t\(Int(y))\t\(Int(width))\t\(Int(height))")
     }
+    print(lines.joined(separator: "\n"))
 }
 
 func printAppPID(_ appPath: String) throws {
@@ -353,18 +346,18 @@ func printDisplayModes() {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    fputs("Usage: render-readme-media.swift seed-clipboard | verify-clipboard-demo | seed-echotype | window OWNER | windows | windows-pid PID | pid APP_BUNDLE | display-geometry | wallpaper OUT | social OUT ICON NAME TAGLINE SCREENSHOT_OR_EMPTY | profile-social OUT ICON1 ICON2 ICON3 ICON4 | banner OUT ICON1 ICON2 ICON3 ICON4\n", stderr)
+    fputs("Usage: render-readme-media.swift clipboard-demo-args | clipboard-demo-summary | seed-echotype | window OWNER | windows | windows-pid PID | pid APP_BUNDLE | display-geometry | wallpaper OUT | social OUT ICON NAME TAGLINE SCREENSHOT_OR_EMPTY | profile-social OUT ICON1 ICON2 ICON3 ICON4 | banner OUT ICON1 ICON2 ICON3 ICON4\n", stderr)
     exit(2)
 }
 
 do {
     switch command {
-    case "seed-clipboard":
-        guard args.count == 1 else { throw MediaError(description: "seed-clipboard takes no extra arguments") }
-        try seedClipboard()
-    case "verify-clipboard-demo":
-        guard args.count == 1 else { throw MediaError(description: "verify-clipboard-demo takes no extra arguments") }
-        try verifyClipboardDemo()
+    case "clipboard-demo-args":
+        guard args.count == 1 else { throw MediaError(description: "clipboard-demo-args takes no extra arguments") }
+        try printClipboardDemoArguments()
+    case "clipboard-demo-summary":
+        guard args.count == 1 else { throw MediaError(description: "clipboard-demo-summary takes no extra arguments") }
+        print(clipboardDemoSummary(paused: true, entries: clipboardDemoFixture))
     case "seed-echotype":
         guard args.count == 1 else { throw MediaError(description: "seed-echotype takes no extra arguments") }
         try seedEchoType()

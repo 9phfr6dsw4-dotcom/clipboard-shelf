@@ -65,6 +65,41 @@ def select_unique_popover(
     return matches[0]
 
 
+WINDOW_INVENTORY_HEADER = ["windowID", "PID", "layer", "alpha", "x", "y", "width", "height"]
+
+
+def select_popover_from_inventory(
+    inventory: str,
+    *,
+    pid: int,
+    status_frame: Sequence[int],
+    display_size: Sequence[int],
+) -> tuple[int, int, int, int]:
+    """Apply the strict adjacency predicate to every visible window the launched PID owns.
+
+    The inventory is the render helper's `windows-pid` TSV. Any malformed row or row for
+    another process means the enumeration cannot be trusted, so selection fails closed.
+    """
+    rows = [line.split("\t") for line in inventory.splitlines()]
+    if not rows or rows[0] != WINDOW_INVENTORY_HEADER:
+        raise CaptureValidationError("invalid_app_window_inventory")
+    frames: list[tuple[int, int, int, int]] = []
+    for row in rows[1:]:
+        try:
+            if len(row) != len(WINDOW_INVENTORY_HEADER):
+                raise ValueError("row shape")
+            window_id, row_pid, _layer = (int(value) for value in row[:3])
+            alpha = float(row[3])
+            x, y, width, height = (int(value) for value in row[4:])
+        except ValueError:
+            raise CaptureValidationError("invalid_app_window_inventory") from None
+        if window_id <= 0 or row_pid != pid or not 0 <= alpha <= 1:
+            raise CaptureValidationError("invalid_app_window_inventory")
+        if alpha > 0:
+            frames.append((x, y, width, height))
+    return select_unique_popover(status_frame, frames, display_size)
+
+
 def png_dimensions(path: Path) -> tuple[int, int]:
     """Read only the PNG signature/IHDR dimensions; never decode image pixels."""
     try:
@@ -102,6 +137,10 @@ def main() -> int:
     geometry.add_argument("--status", nargs=4, type=int, required=True)
     geometry.add_argument("--popover", nargs=4, type=int, required=True)
     geometry.add_argument("--display", nargs=2, type=int, required=True)
+    select = commands.add_parser("select-popover", help="read a windows-pid TSV inventory on stdin")
+    select.add_argument("--pid", type=int, required=True)
+    select.add_argument("--status", nargs=4, type=int, required=True)
+    select.add_argument("--display", nargs=2, type=int, required=True)
     png = commands.add_parser("png")
     png.add_argument("path", type=Path)
     png.add_argument("--expected", nargs=2, type=int, required=True)
@@ -109,6 +148,11 @@ def main() -> int:
     try:
         if args.command == "geometry":
             selected = select_unique_popover(args.status, [args.popover], args.display)
+            print("|".join(str(value) for value in selected))
+        elif args.command == "select-popover":
+            selected = select_popover_from_inventory(
+                sys.stdin.read(), pid=args.pid, status_frame=args.status, display_size=args.display
+            )
             print("|".join(str(value) for value in selected))
         else:
             validate_png_dimensions(

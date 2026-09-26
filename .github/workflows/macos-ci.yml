@@ -27,12 +27,12 @@ jobs:
           test "$keychain_id" = "com.apple.keychainaccess"
 
       - name: Verify isolated synthetic clipboard fixture
-        run: |
-          demo_home="$(mktemp -d "$RUNNER_TEMP/clipboard-shelf-demo-home.XXXXXXXX")"
-          mkdir -p "$demo_home/Library/Preferences"
-          CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard
-          CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift verify-clipboard-demo
-          test -s "$demo_home/Library/Preferences/local.clipboardshelf.plist"
+        timeout-minutes: 10
+        run: bash .github/scripts/verify-clipboard-demo-isolation.sh
+
+      - name: Verify PID-bound popover geometry with a synthetic fixture
+        timeout-minutes: 10
+        run: bash .github/scripts/verify-status-popover-geometry.sh
 
       - name: Run Swift core tests
         run: bash Scripts/test.sh
@@ -68,3 +68,4 @@ jobs:
           python3 .github/scripts/test-readme-media-demo.py
           python3 .github/scripts/test-readme-media-capture-validation.py
           python3 .github/scripts/test-readme-media-release.py
+          python3 .github/scripts/test-readme-media-popover-selection.py

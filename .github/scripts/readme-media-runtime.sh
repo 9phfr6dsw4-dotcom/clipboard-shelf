@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+README_MEDIA_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 set_appearance() {
   local requested="${1:-}" expected actual
@@ -41,6 +42,89 @@ APPLESCRIPT
     printf 'Appearance verification failed: requested=%s actual=%s.\n' "$expected" "$actual" >&2
     return 1
   fi
+}
+
+get_appearance() {
+  local actual
+  actual="$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode')" || return 1
+  case "$actual" in
+    true|false) printf '%s\n' "$actual" ;;
+    *) printf 'Unreadable appearance state: %s\n' "$actual" >&2; return 1 ;;
+  esac
+}
+
+# Restores the appearance snapshotted in ORIGINAL_DARK_MODE; a no-op when nothing was snapshotted.
+restore_appearance() {
+  [[ -n "${ORIGINAL_DARK_MODE:-}" ]] || return 0
+  case "$ORIGINAL_DARK_MODE" in
+    true|false) set_appearance "$ORIGINAL_DARK_MODE" ;;
+    *) printf 'Refusing to restore a corrupted appearance snapshot.\n' >&2; return 1 ;;
+  esac
+}
+
+# The account's real home from directory services; HOME can be overridden and cfprefsd ignores it.
+real_user_home() {
+  local home
+  home="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '$1 == "NFSHomeDirectory:" { print $2 }')" || return 1
+  [[ "$home" == /* && -d "$home" ]] || { printf 'Could not resolve the real user home.\n' >&2; return 1; }
+  printf '%s\n' "$home"
+}
+
+# Succeeds only if the real user's preference domain has no plist (plain, ByHost, or dangling
+# symlink) and cfprefsd reports no values for it.
+clipboard_domain_absent() {
+  local real_home="${1:-}" domain="${2:-}" plist
+  [[ "$real_home" == /* && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
+  plist="$real_home/Library/Preferences/$domain.plist"
+  if [[ -e "$plist" || -L "$plist" ]] || compgen -G "$real_home/Library/Preferences/ByHost/$domain.*.plist" >/dev/null; then
+    printf 'A real preference file exists for %s.\n' "$domain" >&2
+    return 1
+  fi
+  if defaults read "$domain" >/dev/null 2>&1; then
+    printf 'The real preference domain %s holds values.\n' "$domain" >&2
+    return 1
+  fi
+}
+
+# Loads the synthetic Clipboard Shelf fixture as NSArgumentDomain launch arguments into
+# CLIPBOARD_DEMO_ARGS. Launch arguments are never persisted, unlike any CFPreferences write.
+load_clipboard_demo_args() {
+  local output line data_literal='^<[0-9a-f]+>$'
+  CLIPBOARD_DEMO_ARGS=()
+  output="$(swift "$HELPER" clipboard-demo-args)" || return 1
+  while IFS= read -r line; do CLIPBOARD_DEMO_ARGS+=("$line"); done <<< "$output"
+  if (( ${#CLIPBOARD_DEMO_ARGS[@]} != 4 )) \
+    || [[ "${CLIPBOARD_DEMO_ARGS[0]}" != -ClipboardShelfHistoryV1 ]] \
+    || [[ ! "${CLIPBOARD_DEMO_ARGS[1]}" =~ $data_literal ]] \
+    || [[ "${CLIPBOARD_DEMO_ARGS[2]}" != -ClipboardShelfRecordingPausedV1 ]] \
+    || [[ "${CLIPBOARD_DEMO_ARGS[3]}" != YES ]]; then
+    CLIPBOARD_DEMO_ARGS=()
+    printf 'Synthetic fixture arguments are malformed.\n' >&2
+    return 1
+  fi
+}
+
+# Prints pop_x|pop_y|pop_w|pop_h|status_x|status_y|status_w|status_h|0 for the popover of
+# the launched PID. The status item is matched by PID and exact accessibility description;
+# the popover comes from that PID's complete CGWindowList inventory, because System Events
+# exposes no NSPopover windows. Absent, malformed, or ambiguous data fails closed.
+status_popover_geometry() {
+  local pid="${1:-}" description="${2:-}" status inventory display_info frame popover
+  local status_x status_y status_w status_h
+  local frame_re='^[0-9]{1,6}[|][0-9]{1,6}[|][0-9]{1,6}[|][0-9]{1,6}$'
+  [[ "$pid" =~ ^[0-9]+$ && -n "$description" ]] || return 1
+  status="$(osascript "$README_MEDIA_SCRIPTS/readme-media-status-item.applescript" frame "$pid" "$description")" || return 1
+  [[ "$status" =~ $frame_re ]] || return 1
+  IFS='|' read -r status_x status_y status_w status_h <<< "$status"
+  inventory="$(swift "$HELPER" windows-pid "$pid")" || return 1
+  display_info="$(swift "$HELPER" display-info)" || return 1
+  frame="${display_info%%|*}"
+  frame="${frame#frame=}"
+  [[ "$frame" =~ ^[0-9]{1,6}x[0-9]{1,6}$ ]] || return 1
+  popover="$(printf '%s\n' "$inventory" | python3 "$README_MEDIA_SCRIPTS/validate_readme_media_capture.py" select-popover \
+    --pid "$pid" --status "$status_x" "$status_y" "$status_w" "$status_h" --display "${frame%x*}" "${frame#*x}")" || return 1
+  [[ "$popover" =~ $frame_re ]] || return 1
+  printf '%s|%s|0\n' "$popover" "$status"
 }
 
 duration_is_acceptable() {

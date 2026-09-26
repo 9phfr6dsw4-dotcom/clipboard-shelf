@@ -7,6 +7,8 @@ RELEASE_TOKEN="${GH_TOKEN:?GH_TOKEN is required}"
 export -n RELEASE_TOKEN
 unset GH_TOKEN
 HELPER="$ROOT/.github/scripts/render-readme-media.swift"
+source "$ROOT/.github/scripts/readme-media-runtime.sh"
+ORIGINAL_DARK_MODE=''
 
 case "$APP_KEY" in
   clipboard-shelf)
@@ -40,7 +42,12 @@ case "$APP_KEY" in
   *) printf 'Unknown APP_KEY: %s\n' "$APP_KEY" >&2; exit 2 ;;
 esac
 
-STATUS_LABEL="$APP_NAME"
+# Exact accessibility description of the launched app's status item. For Clipboard Shelf
+# it also proves the app read the paused fixture: it reads "Clipboard Shelf" when recording.
+case "$APP_KEY" in
+  clipboard-shelf) STATUS_DESCRIPTION='Clipboard Shelf — recording paused' ;;
+  *) STATUS_DESCRIPTION='' ;;
+esac
 
 case "$APP_KEY" in
   clipboard-shelf) SLUG='clipboard-shelf' ;;
@@ -50,60 +57,13 @@ case "$APP_KEY" in
 esac
 
 status_item_snapshot() {
-  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" 2>/dev/null <<'APPLESCRIPT'
-on run argv
-  set appName to item 1 of argv
-  set statusLabel to item 2 of argv
-  try
-    tell application "System Events"
-      tell process appName
-        set statusItem to missing value
-        set matches to 0
-        try
-          repeat with candidate in every menu bar item of menu bar 2
-            set itemName to ""
-            set itemDescription to ""
-            try
-              set itemName to name of candidate as text
-            end try
-            try
-              set itemDescription to description of candidate as text
-            end try
-            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-              set statusItem to candidate
-              set matches to matches + 1
-            end if
-          end repeat
-        end try
-        if matches is 0 then
-          try
-            repeat with candidate in every menu bar item of menu bar 1
-              set itemName to ""
-              set itemDescription to ""
-              try
-                set itemName to name of candidate as text
-              end try
-              try
-                set itemDescription to description of candidate as text
-              end try
-              if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-                set statusItem to candidate
-                set matches to matches + 1
-              end if
-            end repeat
-          end try
-        end if
-        if matches is not 1 then return ((matches as integer) as text) & "|0|0|0|0"
-        set itemPosition to position of statusItem
-        set itemSize to size of statusItem
-        return "1|" & ((item 1 of itemPosition as integer) as text) & "|" & ((item 2 of itemPosition as integer) as text) & "|" & ((item 1 of itemSize as integer) as text) & "|" & ((item 2 of itemSize as integer) as text)
-      end tell
-    end tell
-  on error
-    return "-1|0|0|0|0"
-  end try
-end run
-APPLESCRIPT
+  local frame
+  [[ "$APP_PID" =~ ^[0-9]+$ && -n "$STATUS_DESCRIPTION" ]] || { printf '%s\n' '-1|0|0|0|0'; return 0; }
+  if frame="$(osascript "$ROOT/.github/scripts/readme-media-status-item.applescript" frame "$APP_PID" "$STATUS_DESCRIPTION" 2>/dev/null)"; then
+    printf '1|%s\n' "$frame"
+  else
+    printf '%s\n' '-1|0|0|0|0'
+  fi
 }
 
 if [[ -L "$ROOT/docs" || -L "$ROOT/docs/images" ]]; then
@@ -119,6 +79,7 @@ ARTIFACT_DIR="$RUNNER_TEMP/readme-media"
 DIAG_DIR="$ARTIFACT_DIR/diagnostics"
 EXTRACT_DIR="$RUNNER_TEMP/release-app"
 APP_PID=''
+CLIPBOARD_REAL_HOME=''
 GEOMETRY_REJECTION_REASON='capture_failed_before_geometry_check'
 python3 "$ROOT/.github/scripts/prepare-readme-media-artifacts.py" "$RUNNER_TEMP" "$ARTIFACT_DIR"
 [[ ! -L "$DIAG_DIR" ]] || { printf 'Refusing symlinked diagnostic directory.\n' >&2; exit 1; }
@@ -130,6 +91,9 @@ write_geometry_snapshot() {
     status_item_click_failed|strict_ax_adjacency_predicate_failed_after_12_polls|capture_failed_before_geometry_check|capture_failed_after_geometry_check|capture_pixel_validation_failed|diagnostic_collection_failed) ;;
     *) reason='diagnostic_collection_failed' ;;
   esac
+  if [[ ! "$APP_PID" =~ ^[0-9]+$ && -n "${APP:-}" && -d "${APP:-}" ]]; then
+    APP_PID="$(swift "$HELPER" pid "$APP" 2>/dev/null)" || APP_PID=''
+  fi
   status_item='-1|0|0|0|0'
   if [[ "$APP_KEY" == clipboard-shelf ]]; then
     status_item="$(status_item_snapshot 2>/dev/null)" || status_item='-1|0|0|0|0'
@@ -137,9 +101,6 @@ write_geometry_snapshot() {
   display_info="$(swift "$HELPER" display-geometry 2>/dev/null)" || display_info=''
   windows_path="$DIAG_DIR/app-windows.tsv"
   printf 'windowID\tPID\tlayer\talpha\tx\ty\twidth\theight\n' > "$windows_path"
-  if [[ ! "$APP_PID" =~ ^[0-9]+$ && -n "${APP:-}" && -d "${APP:-}" ]]; then
-    APP_PID="$(swift "$HELPER" pid "$APP" 2>/dev/null)" || APP_PID=''
-  fi
   if [[ "$APP_PID" =~ ^[0-9]+$ ]]; then
     if windows_tsv="$(swift "$HELPER" windows-pid "$APP_PID" 2>/dev/null)"; then
       printf '%s\n' "$windows_tsv" > "$windows_path"
@@ -153,9 +114,29 @@ write_geometry_snapshot() {
 capture_exit_diagnostics() {
   local status=$?
   trap - EXIT
+  set +e
+  if ! restore_appearance; then
+    printf 'Could not restore the runner appearance snapshot (dark=%s).\n' "$ORIGINAL_DARK_MODE" >&2
+    (( status != 0 )) || status=1
+  fi
   if (( status != 0 )) && [[ "$APP_KEY" == clipboard-shelf ]]; then
-    set +e
     write_geometry_snapshot "$GEOMETRY_REJECTION_REASON"
+  fi
+  if [[ "$APP_KEY" == clipboard-shelf && -n "$CLIPBOARD_REAL_HOME" ]]; then
+    # SIGKILL the exact launched PID: a normal quit runs saveHistory into the real domain.
+    if [[ ! "$APP_PID" =~ ^[0-9]+$ && -n "${APP:-}" && -d "${APP:-}" ]]; then
+      APP_PID="$(swift "$HELPER" pid "$APP" 2>/dev/null)" || APP_PID=''
+    fi
+    if [[ "$APP_PID" =~ ^[0-9]+$ ]]; then
+      kill -KILL "$APP_PID" 2>/dev/null
+    elif [[ -n "${APP:-}" ]] && pgrep -f -- "$APP/Contents/MacOS/" >/dev/null 2>&1; then
+      printf 'Could not bind the running Clipboard Shelf to one PID to stop it; failing the capture.\n' >&2
+      (( status != 0 )) || status=1
+    fi
+    if ! clipboard_domain_absent "$CLIPBOARD_REAL_HOME" local.clipboardshelf; then
+      printf 'Clipboard Shelf state reached the real preference domain; failing the capture.\n' >&2
+      (( status != 0 )) || status=1
+    fi
   fi
   exit "$status"
 }
@@ -212,55 +193,11 @@ show_menu_popover() {
     GEOMETRY_REJECTION_REASON='capture_failed_after_geometry_check'
     return 0
   fi
-  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" <<'APPLESCRIPT' || { GEOMETRY_REJECTION_REASON='status_item_click_failed'; return 1; }
-on run argv
-  set appName to item 1 of argv
-  set statusLabel to item 2 of argv
-  tell application "System Events"
-    tell process appName
-      set frontmost to true
-      set statusItem to missing value
-      set matches to 0
-      try
-        repeat with candidate in every menu bar item of menu bar 2
-          set itemName to ""
-          set itemDescription to ""
-          try
-            set itemName to name of candidate as text
-          end try
-          try
-            set itemDescription to description of candidate as text
-          end try
-          if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-            set statusItem to candidate
-            set matches to matches + 1
-          end if
-        end repeat
-      end try
-      if matches is 0 then
-        try
-          repeat with candidate in every menu bar item of menu bar 1
-            set itemName to ""
-            set itemDescription to ""
-            try
-              set itemName to name of candidate as text
-            end try
-            try
-              set itemDescription to description of candidate as text
-            end try
-            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-              set statusItem to candidate
-              set matches to matches + 1
-            end if
-          end repeat
-        end try
-      end if
-      if matches is not 1 then error "Could not uniquely identify this app's menu-bar status item."
-      click statusItem
-    end tell
-  end tell
-end run
-APPLESCRIPT
+  if [[ ! "$APP_PID" =~ ^[0-9]+$ || -z "$STATUS_DESCRIPTION" ]] \
+    || ! osascript "$ROOT/.github/scripts/readme-media-status-item.applescript" click "$APP_PID" "$STATUS_DESCRIPTION" >/dev/null; then
+    GEOMETRY_REJECTION_REASON='status_item_click_failed'
+    return 1
+  fi
   local attempt
   for attempt in {1..12}; do
     if menu_geometry >/dev/null 2>&1; then
@@ -275,89 +212,7 @@ APPLESCRIPT
 }
 
 menu_geometry() {
-  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" <<'APPLESCRIPT'
-on run argv
-  set appName to item 1 of argv
-  set statusLabel to item 2 of argv
-  tell application "System Events"
-    tell process appName
-      set statusItem to missing value
-      set matches to 0
-      try
-        repeat with candidate in every menu bar item of menu bar 2
-          set itemName to ""
-          set itemDescription to ""
-          try
-            set itemName to name of candidate as text
-          end try
-          try
-            set itemDescription to description of candidate as text
-          end try
-          if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-            set statusItem to candidate
-            set matches to matches + 1
-          end if
-        end repeat
-      end try
-      if matches is 0 then
-        try
-          repeat with candidate in every menu bar item of menu bar 1
-            set itemName to ""
-            set itemDescription to ""
-            try
-              set itemName to name of candidate as text
-            end try
-            try
-              set itemDescription to description of candidate as text
-            end try
-            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-              set statusItem to candidate
-              set matches to matches + 1
-            end if
-          end repeat
-        end try
-      end if
-      if matches is not 1 then error "Could not uniquely identify this app's menu-bar status item."
-      set statusPosition to position of statusItem
-      set statusSize to size of statusItem
-      set statusLeft to item 1 of statusPosition as integer
-      set statusTop to item 2 of statusPosition as integer
-      set statusRight to statusLeft + (item 1 of statusSize as integer)
-      set statusBottom to statusTop + (item 2 of statusSize as integer)
-      set matchingWindows to 0
-      set windowPosition to {0, 0}
-      set windowSize to {0, 0}
-      repeat with candidateWindow in every window
-        try
-          if visible of candidateWindow then
-            set candidatePosition to position of candidateWindow
-            set candidateSize to size of candidateWindow
-            set candidateLeft to item 1 of candidatePosition as integer
-            set candidateTop to item 2 of candidatePosition as integer
-            set candidateWidth to item 1 of candidateSize as integer
-            set candidateHeight to item 2 of candidateSize as integer
-            set verticalGap to candidateTop - statusBottom
-            set overlapsStatusItem to (candidateLeft < statusRight + 80) and (candidateLeft + candidateWidth > statusLeft - 80)
-            if overlapsStatusItem and verticalGap >= -8 and verticalGap <= 120 and candidateWidth >= 240 and candidateHeight >= 240 then
-              set matchingWindows to matchingWindows + 1
-              set windowPosition to candidatePosition
-              set windowSize to candidateSize
-            end if
-          end if
-        end try
-      end repeat
-      if matchingWindows is not 1 then error "Could not uniquely identify a visible popover adjacent to the app status item."
-    end tell
-  end tell
-  set fields to {item 1 of windowPosition, item 2 of windowPosition, item 1 of windowSize, item 2 of windowSize, item 1 of statusPosition, item 2 of statusPosition, item 1 of statusSize, item 2 of statusSize, 0}
-  set output to ""
-  repeat with fieldValue in fields
-    if output is not "" then set output to output & "|"
-    set output to output & (((fieldValue as integer) as text))
-  end repeat
-  return output
-end run
-APPLESCRIPT
+  status_popover_geometry "$APP_PID" "$STATUS_DESCRIPTION"
 }
 
 window_info() {
@@ -463,16 +318,20 @@ capture_menu_region() {
   fi
 }
 
-DEMO_HOME=''
+# The synthetic history reaches the app only as NSArgumentDomain launch arguments, which
+# are never persisted; macos-ci.yml proves a same-identifier bundle reads exactly this
+# fixture that way. Refuse to run if the real domain already exists so real history is
+# never read, captured, or overwritten.
 prepare_clipboard_demo() {
-  DEMO_HOME="$(mktemp -d "$RUNNER_TEMP/readme-media-demo-home.XXXXXXXX")"
-  chmod 700 "$DEMO_HOME"
-  CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard
-  CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo
-  [[ -s "$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist" ]] || {
-    printf 'Synthetic preferences were not confined to the RUNNER_TEMP demo home.\n' >&2
+  local real_home
+  real_home="$(real_user_home)" || return 1
+  clipboard_domain_absent "$real_home" local.clipboardshelf || {
+    printf 'Refusing to launch: the real Clipboard Shelf preference domain already exists.\n' >&2
     return 1
   }
+  # Arms the EXIT-trap postcondition only once the domain is known to be absent.
+  CLIPBOARD_REAL_HOME="$real_home"
+  load_clipboard_demo_args
 }
 
 DEMO_DOWNLOADS=''
@@ -532,8 +391,6 @@ end tell
 APPLESCRIPT
 }
 
-source "$ROOT/.github/scripts/readme-media-runtime.sh"
-
 caption_transcript_loaded() {
   osascript <<'APPLESCRIPT'
 tell application "System Events"
@@ -550,11 +407,15 @@ end tell
 APPLESCRIPT
 }
 
+# Snapshot before any appearance change; the EXIT trap restores it on every path.
+ORIGINAL_DARK_MODE="$(get_appearance)"
+
 case "$APP_KEY" in
   clipboard-shelf)
     prepare_clipboard_demo
-    open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"
+    open -n "$APP" --args "${CLIPBOARD_DEMO_ARGS[@]}"
     sleep 5
+    APP_PID="$(swift "$HELPER" pid "$APP")"
     set_appearance false
     show_menu_popover
     capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-light.png"
@@ -562,10 +423,6 @@ case "$APP_KEY" in
     sleep 2
     show_menu_popover
     capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-dark.png"
-    set_appearance false
-    show_menu_popover
-    LAST_MENU_REGION="$(verified_menu_region)"
-    capture_video_region "$LAST_MENU_REGION"
     ;;
   quick-drop-zone)
     prepare_quick_drop_demo
