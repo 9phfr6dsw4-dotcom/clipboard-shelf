@@ -1,4 +1,4 @@
-name: Temporary README screenshot
+name: Temporary README image capture
 
 on:
   workflow_dispatch:
@@ -12,55 +12,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Build app
-        run: bash Scripts/build.sh
-      - name: Seed synthetic clipboard text and capture the menu-bar app
+      - name: Build app and export its icon
         run: |
           set -euo pipefail
+          bash Scripts/build.sh
           mkdir -p "$RUNNER_TEMP/readme-images"
-          cat > "$RUNNER_TEMP/capture.swift" <<'SWIFT'
-          import AppKit
-          import CoreGraphics
-          import ImageIO
-          import UniformTypeIdentifiers
-          import Foundation
-          let args = CommandLine.arguments
-          guard args.count == 3 else { fatalError("owner and output required") }
-          let owner = args[1]
-          let output = URL(fileURLWithPath: args[2])
-          let ownerKey = kCGWindowOwnerName as String
-          let layerKey = kCGWindowLayer as String
-          let numberKey = kCGWindowNumber as String
-          let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
-          guard let row = windows.first(where: { ($0[ownerKey] as? String) == owner && ($0[layerKey] as? Int ?? 0) == 0 }),
-                let number = row[numberKey] as? CGWindowID,
-                let image = CGWindowListCreateImage(.null, .optionIncludingWindow, number, [.boundsIgnoreFraming, .bestResolution]),
-                let destination = CGImageDestinationCreateWithURL(output as CFURL, UTType.png.identifier as CFString, 1, nil) else {
-            fputs("Could not capture a visible window for \(owner)\n", stderr); exit(1)
-          }
-          CGImageDestinationAddImage(destination, image, nil)
-          guard CGImageDestinationFinalize(destination) else { exit(2) }
-          SWIFT
-          APP="dist/Clipboard Shelf.app"
-          open "$APP"
-          printf 'Project notes: finish the welcome page draft' | pbcopy
-          sleep 1
-          printf 'Release checklist: review the download and privacy copy' | pbcopy
-          sleep 1
-          printf 'Design review: confirm spacing and contrast' | pbcopy
-          sleep 1
-          printf 'Build status: macOS package verified' | pbcopy
-          sleep 2
-          osascript <<'APPLESCRIPT'
-          tell application "System Events"
-            tell process "SystemUIServer"
-              click (first menu bar item of menu bar 1 whose name contains "Clipboard Shelf")
-            end tell
-          end tell
-          APPLESCRIPT
-          sleep 2
-          sips -s format png "$APP/Contents/Resources/AppIcon.icns" --out "$RUNNER_TEMP/readme-images/clipboard-shelf-icon.png" >/dev/null
-          swift "$RUNNER_TEMP/capture.swift" ClipboardShelf "$RUNNER_TEMP/readme-images/clipboard-shelf-window.png"
+          sips -s format png "dist/Clipboard Shelf.app/Contents/Resources/AppIcon.icns" --out "$RUNNER_TEMP/readme-images/clipboard-shelf-icon.png" >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: clipboard-shelf-readme-images
