@@ -29,8 +29,8 @@ jobs:
       - name: Verify isolated synthetic clipboard fixture
         run: |
           demo_home="$(mktemp -d "$RUNNER_TEMP/clipboard-shelf-demo-home.XXXXXXXX")"
-          HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard
-          HOME="$demo_home" swift .github/scripts/render-readme-media.swift verify-clipboard-demo
+          CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard
+          CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift verify-clipboard-demo
           test -s "$demo_home/Library/Preferences/local.clipboardshelf.plist"
 
       - name: Run Swift core tests

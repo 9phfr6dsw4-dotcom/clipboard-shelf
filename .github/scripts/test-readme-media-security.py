@@ -65,7 +65,7 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         release_marker = 'if [[ "$APP_KEY" == clipboard-shelf ]]; then\n  printf \'Verifying pinned published release'
         shelf_release = self.capture.split(release_marker, 1)[1].split("\nelse\n", 1)[0]
         clear_token = shelf_release.index("unset RELEASE_TOKEN GH_TOKEN")
-        first_launch = self.capture.index('open --env "HOME=$DEMO_HOME" "$APP"')
+        first_launch = self.capture.index('open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"')
         self.assertLess(copy_token, unexport_token)
         self.assertLess(unexport_token, unset_inherited_token)
         self.assertLess(unset_inherited_token, release_view)
@@ -133,10 +133,14 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         verify = helper.split("func verifyClipboardDemo() throws", 1)[1].split("func seedEchoType()", 1)[0]
         self.assertIn("Set(entries.map(\\.text)) == expectedTexts", verify)
         self.assertIn("entries.filter(\\.isPinned).count == 2", verify)
-        self.assertIn('HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard', self.capture)
-        self.assertIn('HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo', self.capture)
-        self.assertIn('open --env "HOME=$DEMO_HOME" "$APP"', self.capture)
+        self.assertIn('CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard', self.capture)
+        self.assertIn('CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo', self.capture)
+        self.assertIn('--env "CFFIXED_USER_HOME=$DEMO_HOME"', self.capture)
+        self.assertIn('open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"', self.capture)
         self.assertIn('"$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist"', self.capture)
+        macos_ci = MACOS_CI.read_text(encoding="utf-8")
+        self.assertIn('CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard', macos_ci)
+        self.assertIn('test -s "$demo_home/Library/Preferences/local.clipboardshelf.plist"', macos_ci)
         launch = (ROOT / "Sources/main.swift").read_text(encoding="utf-8")
         pasteboard_check = launch.split("@objc private func checkPasteboard()", 1)[1].split("func clipboardShelfViewController", 1)[0]
         self.assertLess(pasteboard_check.index("guard !isRecordingPaused"), pasteboard_check.index("pasteboard.string(forType: .string)"))

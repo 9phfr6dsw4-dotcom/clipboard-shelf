@@ -465,11 +465,10 @@ capture_menu_region() {
 
 DEMO_HOME=''
 prepare_clipboard_demo() {
-  DEMO_HOME="$RUNNER_TEMP/readme-media-demo-home"
-  [[ ! -e "$DEMO_HOME" && ! -L "$DEMO_HOME" ]] || { printf 'Refusing pre-existing synthetic preference directory.\n' >&2; return 1; }
-  mkdir -m 700 "$DEMO_HOME"
-  HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard
-  HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo
+  DEMO_HOME="$(mktemp -d "$RUNNER_TEMP/readme-media-demo-home.XXXXXXXX")"
+  chmod 700 "$DEMO_HOME"
+  CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard
+  CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo
   [[ -s "$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist" ]] || {
     printf 'Synthetic preferences were not confined to the RUNNER_TEMP demo home.\n' >&2
     return 1
@@ -554,7 +553,7 @@ APPLESCRIPT
 case "$APP_KEY" in
   clipboard-shelf)
     prepare_clipboard_demo
-    open --env "HOME=$DEMO_HOME" "$APP"
+    open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"
     sleep 5
     set_appearance false
     show_menu_popover
