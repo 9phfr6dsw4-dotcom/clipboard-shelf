@@ -1,35 +1,43 @@
-# Clipboard Shelf
+<p align="center">
+  <img src="docs/images/clipboard-shelf-icon.png" width="88" alt="Clipboard Shelf app icon">
+</p>
 
-Clipboard Shelf is a private, native macOS menu-bar app that keeps a searchable history of copied text.
+<h1 align="center">Clipboard Shelf</h1>
+
+<p align="center">A quiet macOS menu-bar clipboard history with search, pins, and a pause switch.</p>
+
+<p align="center"><a href="https://github.com/9phfr6dsw4-dotcom/clipboard-shelf/releases/latest"><strong>Download the latest release</strong></a> · macOS 13+ · Apple silicon and Intel</p>
 
 ## Features
 
-- Remembers the 20 most recent text copies.
-- Pins favorites so they are not removed when newer items arrive.
-- Searches copied text instantly and without case sensitivity.
-- Copies an item back to the clipboard with one click.
-- Clears recent items while preserving pins.
-- Skips clipboard items marked concealed, transient, auto-generated, or by known password-manager pasteboard types.
-- Skips copies made while Apple's Passwords (`com.apple.Passwords`) or Keychain Access (`com.apple.keychainaccess`) is frontmost.
-- Includes a persistent **Pause recording** toggle for temporarily disabling all clipboard recording.
-- Saves everything locally in macOS `UserDefaults`; it has no networking or analytics.
-- Runs only in the menu bar, without a Dock icon.
-- Supports Apple silicon and Intel Macs running macOS 13 or newer.
+- Case-insensitively search the 20 most recent copied text items and copy one back with a click.
+- Pin favorites, clear recent items without removing pins, or pause recording at any time.
+- Skip concealed, transient, auto-generated, and known password-manager clipboard items. Recording also pauses while Apple Passwords or Keychain Access is frontmost.
+- Runs in the menu bar with no Dock icon.
 
 ## Install
 
-1. Download `Clipboard-Shelf-1.0.0.zip` from the private GitHub release.
-2. Double-click the ZIP and move **Clipboard Shelf.app** into Applications.
-3. The first time, Control-click the app, choose **Open**, then choose **Open** again. This is required because the private build is ad-hoc signed rather than Apple-notarized.
-4. Look for the clipboard icon in the menu bar.
+1. Download the ZIP from the latest release and unzip it.
+2. Move **Clipboard Shelf.app** to **Applications before opening it**.
+3. Open it once. If macOS blocks it, go to **System Settings → Privacy & Security → Open Anyway**, confirm, then reopen Clipboard Shelf from Applications.
+4. Click its clipboard icon in the menu bar to search or use your history.
 
-## Build and test
+The release is ad-hoc signed and not notarized. No additional macOS privacy permission is required.
 
-On a Mac with Apple Command Line Tools or Xcode installed:
+## Privacy
 
-```bash
+Clipboard history and preferences are stored locally in macOS `UserDefaults`. Clipboard Shelf has no networking or analytics code. Use **Pause recording** whenever you do not want new copies saved.
+
+<details>
+<summary>Build and test</summary>
+
+On a Mac with Apple Command Line Tools or Xcode:
+
+```sh
 bash Scripts/test.sh
 bash Scripts/build.sh
 ```
 
-The build script creates a Universal 2 application and ZIP in `dist/`, validates the bundle, verifies the signature and architectures, and runs the packaged app's self-test.
+The build creates a Universal 2 app and validates its bundle, signature, architectures, and packaged self-test.
+
+</details>
