@@ -11,6 +11,10 @@ HELPER="$ROOT/.github/scripts/render-readme-media.swift"
 case "$APP_KEY" in
   clipboard-shelf)
     RELEASE_REPO='9phfr6dsw4-dotcom/clipboard-shelf'
+    RELEASE_TAG='v1.0.2'
+    RELEASE_ARCHIVE='Clipboard-Shelf-1.0.2.zip'
+    RELEASE_SIDECAR='Clipboard-Shelf-1.0.2.zip.sha256'
+    RELEASE_COMMIT='f25223855444d19e204016e27b8940afec806b20'
     APP_BUNDLE='Clipboard Shelf.app'; WINDOW_OWNER='ClipboardShelf'; APP_NAME='Clipboard Shelf'
     TAGLINE='A quiet macOS menu-bar clipboard history with search, pins, and a pause switch.'
     MENU_APP=1
@@ -71,22 +75,24 @@ on run argv
             end if
           end repeat
         end try
-        try
-          repeat with candidate in every menu bar item of menu bar 1
-            set itemName to ""
-            set itemDescription to ""
-            try
-              set itemName to name of candidate as text
-            end try
-            try
-              set itemDescription to description of candidate as text
-            end try
-            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
-              set statusItem to candidate
-              set matches to matches + 1
-            end if
-          end repeat
-        end try
+        if matches is 0 then
+          try
+            repeat with candidate in every menu bar item of menu bar 1
+              set itemName to ""
+              set itemDescription to ""
+              try
+                set itemName to name of candidate as text
+              end try
+              try
+                set itemDescription to description of candidate as text
+              end try
+              if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
+                set statusItem to candidate
+                set matches to matches + 1
+              end if
+            end repeat
+          end try
+        end if
         if matches is not 1 then return ((matches as integer) as text) & "|0|0|0|0"
         set itemPosition to position of statusItem
         set itemSize to size of statusItem
@@ -121,7 +127,7 @@ mkdir -p "$DIAG_DIR"
 write_geometry_snapshot() {
   local reason="${1:-diagnostic_collection_failed}" status_item display_info windows_path windows_tsv
   case "$reason" in
-    status_item_click_failed|strict_ax_adjacency_predicate_failed_after_12_polls|capture_failed_before_geometry_check|capture_failed_after_geometry_check|diagnostic_collection_failed) ;;
+    status_item_click_failed|strict_ax_adjacency_predicate_failed_after_12_polls|capture_failed_before_geometry_check|capture_failed_after_geometry_check|capture_pixel_validation_failed|diagnostic_collection_failed) ;;
     *) reason='diagnostic_collection_failed' ;;
   esac
   status_item='-1|0|0|0|0'
@@ -159,24 +165,31 @@ for runner_child in "$EXTRACT_DIR" "$RUNNER_TEMP/release-download"; do
   [[ ! -L "$runner_child" ]] || { printf 'Refusing symlinked RUNNER_TEMP child: %s\n' "$runner_child" >&2; exit 1; }
 done
 mkdir -p "$EXTRACT_DIR" "$RUNNER_TEMP/release-download"
-rm -f "$ROOT/docs/images/$SLUG-light.png" "$ROOT/docs/images/$SLUG-dark.png" "$ROOT/docs/images/$SLUG-hero.gif" "$ROOT/docs/images/social-preview.png"
 
-printf '%s\n' '=== Display configuration ==='
-system_profiler SPDisplaysDataType 2>&1 | tee "$ARTIFACT_DIR/display-info.txt"
-swift "$HELPER" display-info | tee -a "$ARTIFACT_DIR/display-info.txt"
-echo '=== Preparing a clean synthetic-demo desktop ==='
-swift "$HELPER" wallpaper "$RUNNER_TEMP/readme-wallpaper.png"
-osascript -e "tell application \"System Events\" to tell every desktop to set picture to \"$RUNNER_TEMP/readme-wallpaper.png\"" || printf '%s\n' 'Wallpaper AppleScript was unavailable.'
-defaults write com.apple.finder CreateDesktop false || true
-killall Finder >/dev/null 2>&1 || true
-osascript -e 'tell application "Finder" to close every window' >/dev/null 2>&1 || true
-osascript -e 'tell application "Terminal" to close every window' >/dev/null 2>&1 || true
+printf '%s\n' '=== Display geometry ==='
+swift "$HELPER" display-info | tee "$ARTIFACT_DIR/display-info.txt"
 
-printf 'Downloading latest published release from %s.\n' "$RELEASE_REPO"
-mkdir -p "$RUNNER_TEMP/release-download"
-GH_TOKEN="$RELEASE_TOKEN" gh release download --repo "$RELEASE_REPO" --pattern '*.zip' --dir "$RUNNER_TEMP/release-download"
-unset RELEASE_TOKEN GH_TOKEN
-ZIP_PATH="$(python3 - "$RUNNER_TEMP/release-download" <<'PY'
+if [[ "$APP_KEY" != clipboard-shelf ]]; then
+  rm -f "$ROOT/docs/images/$SLUG-light.png" "$ROOT/docs/images/$SLUG-dark.png" "$ROOT/docs/images/$SLUG-hero.gif" "$ROOT/docs/images/social-preview.png"
+fi
+
+if [[ "$APP_KEY" == clipboard-shelf ]]; then
+  printf 'Verifying pinned published release %s from %s.\n' "$RELEASE_TAG" "$RELEASE_REPO"
+  release_metadata="$(GH_TOKEN="$RELEASE_TOKEN" gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json tagName,isDraft,isPrerelease)"
+  python3 -c 'import json,sys; m=json.loads(sys.argv[1]); sys.exit(0 if m.get("tagName")=="v1.0.2" and not m.get("isDraft") and not m.get("isPrerelease") else 1)' "$release_metadata"
+  release_commit="$(GH_TOKEN="$RELEASE_TOKEN" gh api "repos/$RELEASE_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')"
+  [[ "$release_commit" == "$RELEASE_COMMIT" ]] || { printf 'Pinned release tag commit mismatch.\n' >&2; exit 1; }
+  GH_TOKEN="$RELEASE_TOKEN" gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" \
+    --pattern "$RELEASE_ARCHIVE" --pattern "$RELEASE_SIDECAR" --dir "$RUNNER_TEMP/release-download"
+  unset RELEASE_TOKEN GH_TOKEN
+  ZIP_PATH="$RUNNER_TEMP/release-download/$RELEASE_ARCHIVE"
+  SIDECAR_PATH="$RUNNER_TEMP/release-download/$RELEASE_SIDECAR"
+  python3 "$ROOT/.github/scripts/validate_readme_media_release.py" "$ZIP_PATH" "$SIDECAR_PATH"
+else
+  printf 'Downloading latest published release from %s.\n' "$RELEASE_REPO"
+  GH_TOKEN="$RELEASE_TOKEN" gh release download --repo "$RELEASE_REPO" --pattern '*.zip' --dir "$RUNNER_TEMP/release-download"
+  unset RELEASE_TOKEN GH_TOKEN
+  ZIP_PATH="$(python3 - "$RUNNER_TEMP/release-download" <<'PY'
 from pathlib import Path
 import sys
 files = sorted(Path(sys.argv[1]).glob('*.zip'))
@@ -185,6 +198,8 @@ if len(files) != 1:
 print(files[0])
 PY
 )"
+fi
+
 ditto -x -k "$ZIP_PATH" "$EXTRACT_DIR"
 APP="$EXTRACT_DIR/$APP_BUNDLE"
 test -d "$APP"
@@ -411,9 +426,16 @@ verified_menu_region() {
   IFS='|' read -r frame pixels scale <<< "$display_info"
   frame="${frame#frame=}"
   scale="${scale#scale=}"
-  [[ "$frame" =~ ^[0-9]{1,6}x[0-9]{1,6}$ && "$scale" =~ ^[0-9]{1,6}$ ]] || { printf 'Invalid native display geometry: %s\n' "$display_info" >&2; return 1; }
+  [[ "$frame" =~ ^[0-9]{1,6}x[0-9]{1,6}$ && "$scale" =~ ^[0-9]{1,6}$ ]] || { printf 'Invalid native display geometry.\n' >&2; return 1; }
   screen_width="${frame%x*}"
   screen_height="${frame#*x}"
+  if ! python3 "$ROOT/.github/scripts/validate_readme_media_capture.py" geometry \
+    --status "$icon_x" "$icon_y" "$icon_w" "$icon_h" \
+    --popover "$pop_x" "$pop_y" "$pop_w" "$pop_h" \
+    --display "$screen_width" "$screen_height" >/dev/null; then
+    printf 'Measured app-popover geometry failed independent strict validation.\n' >&2
+    return 1
+  fi
   if ! region="$(menu_region_from_geometry "$pop_x" "$pop_y" "$pop_w" "$pop_h" "$icon_x" "$icon_y" "$icon_w" "$icon_h" "$screen_width" "$screen_height" "$scale")"; then
     printf 'Popover/status-item bounds are absent, invalid, off-screen, or too small; refusing capture.\n' >&2
     return 1
@@ -434,11 +456,24 @@ capture_menu_region() {
   IFS=',' read -r left top width height scale <<< "$LAST_MENU_REGION"
   printf 'Capturing verified region %s,%s,%s,%s at %sx.\n' "$left" "$top" "$width" "$height" "$scale"
   screencapture -x -R "$left,$top,$width,$height" "$output"
-  test -s "$output"
+  if ! python3 "$ROOT/.github/scripts/validate_readme_media_capture.py" png "$output" \
+    --expected "$((width * scale))" "$((height * scale))"; then
+    GEOMETRY_REJECTION_REASON='capture_pixel_validation_failed'
+    return 1
+  fi
 }
 
+DEMO_HOME=''
 prepare_clipboard_demo() {
-  swift "$HELPER" seed-clipboard
+  DEMO_HOME="$RUNNER_TEMP/readme-media-demo-home"
+  [[ ! -e "$DEMO_HOME" && ! -L "$DEMO_HOME" ]] || { printf 'Refusing pre-existing synthetic preference directory.\n' >&2; return 1; }
+  mkdir -m 700 "$DEMO_HOME"
+  HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard
+  HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo
+  [[ -s "$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist" ]] || {
+    printf 'Synthetic preferences were not confined to the RUNNER_TEMP demo home.\n' >&2
+    return 1
+  }
 }
 
 DEMO_DOWNLOADS=''
@@ -519,15 +554,15 @@ APPLESCRIPT
 case "$APP_KEY" in
   clipboard-shelf)
     prepare_clipboard_demo
-    open "$APP"
+    open --env "HOME=$DEMO_HOME" "$APP"
     sleep 5
     set_appearance false
     show_menu_popover
-    capture_menu_region "$ROOT/docs/images/clipboard-shelf-light.png"
+    capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-light.png"
     set_appearance true
     sleep 2
     show_menu_popover
-    capture_menu_region "$ROOT/docs/images/clipboard-shelf-dark.png"
+    capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-dark.png"
     set_appearance false
     show_menu_popover
     LAST_MENU_REGION="$(verified_menu_region)"
@@ -608,13 +643,17 @@ APPLESCRIPT
     ;;
 esac
 
-if [[ -s "$ROOT/docs/images/$SLUG-light.png" ]]; then
-  swift "$HELPER" social "$ROOT/docs/images/social-preview.png" "$ICON" "$APP_NAME" "$TAGLINE" "$ROOT/docs/images/$SLUG-light.png"
-  cp "$ROOT/docs/images/social-preview.png" "$ARTIFACT_DIR/social-preview.png"
+if [[ "$APP_KEY" != clipboard-shelf && -s "$ROOT/docs/images/$SLUG-light.png" ]]; then
+  swift "$HELPER" social "$ARTIFACT_DIR/social-preview.png" "$ICON" "$APP_NAME" "$TAGLINE" "$ROOT/docs/images/$SLUG-light.png"
+  printf '%s\n' 'Social preview generated from the real app screenshot.' | tee "$ARTIFACT_DIR/social-preview-status.txt"
+elif [[ "$APP_KEY" == clipboard-shelf ]]; then
+  printf '%s\n' 'Social preview omitted; Clipboard Shelf media is limited to uncomposited app captures.' | tee "$ARTIFACT_DIR/social-preview-status.txt"
 else
   printf 'Social preview omitted because there is no qualifying real app screenshot.\n' | tee "$ARTIFACT_DIR/social-preview-status.txt"
 fi
-for image in "$ROOT/docs/images/$SLUG-light.png" "$ROOT/docs/images/$SLUG-dark.png" "$ROOT/docs/images/$SLUG-hero.gif" "$ROOT/docs/images/social-preview.png"; do
-  [[ ! -e "$image" ]] || cp "$image" "$ARTIFACT_DIR/"
-done
-printf 'Capture candidates are in docs/images and artifacts in %s\n' "$ARTIFACT_DIR"
+if [[ "$APP_KEY" != clipboard-shelf ]]; then
+  for image in "$ROOT/docs/images/$SLUG-light.png" "$ROOT/docs/images/$SLUG-dark.png" "$ROOT/docs/images/$SLUG-hero.gif"; do
+    [[ ! -e "$image" ]] || cp "$image" "$ARTIFACT_DIR/"
+  done
+fi
+printf 'Capture candidates and diagnostics are confined to %s\n' "$ARTIFACT_DIR"

@@ -16,6 +16,7 @@ REASONS = {
     "strict_ax_adjacency_predicate_failed_after_12_polls",
     "capture_failed_before_geometry_check",
     "capture_failed_after_geometry_check",
+    "capture_pixel_validation_failed",
     "diagnostic_collection_failed",
 }
 

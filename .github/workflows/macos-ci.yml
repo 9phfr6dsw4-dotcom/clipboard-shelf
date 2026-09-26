@@ -26,6 +26,13 @@ jobs:
           test "$passwords_id" = "com.apple.Passwords"
           test "$keychain_id" = "com.apple.keychainaccess"
 
+      - name: Verify isolated synthetic clipboard fixture
+        run: |
+          demo_home="$(mktemp -d "$RUNNER_TEMP/clipboard-shelf-demo-home.XXXXXXXX")"
+          HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard
+          HOME="$demo_home" swift .github/scripts/render-readme-media.swift verify-clipboard-demo
+          test -s "$demo_home/Library/Preferences/local.clipboardshelf.plist"
+
       - name: Run Swift core tests
         run: bash Scripts/test.sh
 
@@ -58,3 +65,5 @@ jobs:
           python3 .github/scripts/test-readme-media-artifacts.py
           python3 .github/scripts/test-readme-media-security.py
           python3 .github/scripts/test-readme-media-demo.py
+          python3 .github/scripts/test-readme-media-capture-validation.py
+          python3 .github/scripts/test-readme-media-release.py

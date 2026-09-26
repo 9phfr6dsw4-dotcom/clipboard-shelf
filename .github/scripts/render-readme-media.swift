@@ -185,10 +185,38 @@ func seedClipboard() throws {
     let data = try JSONEncoder().encode(entries)
     let domain = "local.clipboardshelf" as CFString
     CFPreferencesSetAppValue("ClipboardShelfHistoryV1" as CFString, data as CFPropertyList, domain)
-    CFPreferencesSetAppValue("ClipboardShelfRecordingPausedV1" as CFString, false as CFPropertyList, domain)
+    CFPreferencesSetAppValue("ClipboardShelfRecordingPausedV1" as CFString, true as CFPropertyList, domain)
     guard CFPreferencesAppSynchronize(domain) else {
         throw MediaError(description: "Could not synchronize synthetic clipboard history")
     }
+}
+
+func verifyClipboardDemo() throws {
+    struct Entry: Decodable {
+        let text: String
+        let isPinned: Bool
+    }
+    let domain = "local.clipboardshelf" as CFString
+    guard CFPreferencesCopyAppValue("ClipboardShelfRecordingPausedV1" as CFString, domain) as? Bool == true,
+          let data = CFPreferencesCopyAppValue("ClipboardShelfHistoryV1" as CFString, domain) as? Data else {
+        throw MediaError(description: "Synthetic clipboard demo preferences are unavailable or not paused")
+    }
+    let entries = try JSONDecoder().decode([Entry].self, from: data)
+    let expectedTexts: Set<String> = [
+        "func normalize(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }",
+        "https://swift.org/documentation/",
+        "Planning notes — outline, first draft, review, final copy",
+        "Build succeeded on macOS 26 · checks ready",
+        "Release checklist: tests, package, checksum, publish",
+        "Meet at the north entrance at 10:30",
+        "🌿 Small steps, clear notes, and a little patience.",
+        "git status --short"
+    ]
+    guard entries.count == expectedTexts.count, Set(entries.map(\.text)) == expectedTexts,
+          entries.filter(\.isPinned).count == 2 else {
+        throw MediaError(description: "Clipboard demo state is not the exact synthetic fixture")
+    }
+    print("Verified exact synthetic clipboard fixture with recording paused")
 }
 
 func seedEchoType() throws {
@@ -325,7 +353,7 @@ func printDisplayModes() {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    fputs("Usage: render-readme-media.swift seed-clipboard | seed-echotype | window OWNER | windows | windows-pid PID | pid APP_BUNDLE | display-geometry | wallpaper OUT | social OUT ICON NAME TAGLINE SCREENSHOT_OR_EMPTY | profile-social OUT ICON1 ICON2 ICON3 ICON4 | banner OUT ICON1 ICON2 ICON3 ICON4\n", stderr)
+    fputs("Usage: render-readme-media.swift seed-clipboard | verify-clipboard-demo | seed-echotype | window OWNER | windows | windows-pid PID | pid APP_BUNDLE | display-geometry | wallpaper OUT | social OUT ICON NAME TAGLINE SCREENSHOT_OR_EMPTY | profile-social OUT ICON1 ICON2 ICON3 ICON4 | banner OUT ICON1 ICON2 ICON3 ICON4\n", stderr)
     exit(2)
 }
 
@@ -334,6 +362,9 @@ do {
     case "seed-clipboard":
         guard args.count == 1 else { throw MediaError(description: "seed-clipboard takes no extra arguments") }
         try seedClipboard()
+    case "verify-clipboard-demo":
+        guard args.count == 1 else { throw MediaError(description: "verify-clipboard-demo takes no extra arguments") }
+        try verifyClipboardDemo()
     case "seed-echotype":
         guard args.count == 1 else { throw MediaError(description: "seed-echotype takes no extra arguments") }
         try seedEchoType()

@@ -59,16 +59,23 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         copy_token = self.capture.index('RELEASE_TOKEN="${GH_TOKEN:?GH_TOKEN is required}"')
         unexport_token = self.capture.index("export -n RELEASE_TOKEN", copy_token)
         unset_inherited_token = self.capture.index("unset GH_TOKEN", unexport_token)
-        download = self.capture.index('GH_TOKEN="$RELEASE_TOKEN" gh release download --repo')
-        clear_token = self.capture.index("unset RELEASE_TOKEN GH_TOKEN", download)
-        first_launch = self.capture.index('open "$APP"')
+        release_view = self.capture.index('GH_TOKEN="$RELEASE_TOKEN" gh release view')
+        tag_lookup = self.capture.index('GH_TOKEN="$RELEASE_TOKEN" gh api')
+        download = self.capture.index('GH_TOKEN="$RELEASE_TOKEN" gh release download "$RELEASE_TAG"')
+        release_marker = 'if [[ "$APP_KEY" == clipboard-shelf ]]; then\n  printf \'Verifying pinned published release'
+        shelf_release = self.capture.split(release_marker, 1)[1].split("\nelse\n", 1)[0]
+        clear_token = shelf_release.index("unset RELEASE_TOKEN GH_TOKEN")
+        first_launch = self.capture.index('open --env "HOME=$DEMO_HOME" "$APP"')
         self.assertLess(copy_token, unexport_token)
         self.assertLess(unexport_token, unset_inherited_token)
-        self.assertLess(unset_inherited_token, download)
-        self.assertLess(download, clear_token)
-        self.assertLess(clear_token, first_launch)
-        self.assertNotIn("GH_TOKEN", self.capture[unset_inherited_token + len("unset GH_TOKEN"):download])
-        self.assertNotIn("GH_TOKEN", self.capture[clear_token + len("unset RELEASE_TOKEN GH_TOKEN"):first_launch])
+        self.assertLess(unset_inherited_token, release_view)
+        self.assertLess(release_view, tag_lookup)
+        self.assertLess(tag_lookup, download)
+        self.assertLess(download, self.capture.index("unset RELEASE_TOKEN GH_TOKEN", download))
+        self.assertLess(clear_token, len(shelf_release))
+        self.assertLess(self.capture.index("validate_readme_media_release.py"), first_launch)
+        self.assertNotIn("GH_TOKEN", shelf_release[clear_token + len("unset RELEASE_TOKEN GH_TOKEN"):])
+        self.assertNotIn("export GH_TOKEN", self.capture)
 
     def test_appearance_errors_are_not_swallowed(self) -> None:
         self.assertIn("set_appearance()", self.runtime)
@@ -91,6 +98,83 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertLess(artifact_setup, clear_outputs)
         self.assertNotIn('rm -rf "$ROOT/docs/images"', self.capture)
 
+    def test_fixed_shelf_release_is_verified_before_extraction_and_quarantine_removal(self) -> None:
+        marker = 'if [[ "$APP_KEY" == clipboard-shelf ]]; then\n  printf \'Verifying pinned published release'
+        shelf_release = self.capture.split(marker, 1)[1].split("\nelse\n", 1)[0]
+        for required in (
+            "RELEASE_TAG='v1.0.2'",
+            "RELEASE_ARCHIVE='Clipboard-Shelf-1.0.2.zip'",
+            "RELEASE_SIDECAR='Clipboard-Shelf-1.0.2.zip.sha256'",
+            "RELEASE_COMMIT='f25223855444d19e204016e27b8940afec806b20'",
+            "validate_readme_media_release.py",
+        ):
+            self.assertIn(required, self.capture)
+        release_validator = (ROOT / ".github/scripts/validate_readme_media_release.py").read_text(encoding="utf-8")
+        for pinned in (
+            'RELEASE_TAG = "v1.0.2"',
+            'ARCHIVE_NAME = "Clipboard-Shelf-1.0.2.zip"',
+            'SIDECAR_NAME = "Clipboard-Shelf-1.0.2.zip.sha256"',
+            'RELEASE_COMMIT = "f25223855444d19e204016e27b8940afec806b20"',
+            'RELEASE_SHA256 = "ed25cf9e18a6b268ec802f63c16e469ccbece92558760a14413b66585233312f"',
+        ):
+            self.assertIn(pinned, release_validator)
+        verify = shelf_release.index("validate_readme_media_release.py")
+        extract = self.capture.index('ditto -x -k "$ZIP_PATH" "$EXTRACT_DIR"')
+        quarantine = self.capture.index('xattr -dr com.apple.quarantine "$APP"')
+        self.assertLess(self.capture.index("validate_readme_media_release.py"), extract)
+        self.assertLess(extract, quarantine)
+        self.assertNotIn("--pattern '*.zip'", shelf_release)
+        self.assertLess(verify, len(shelf_release))
+
+    def test_clipboard_demo_is_isolated_paused_and_only_uses_synthetic_history(self) -> None:
+        helper = (ROOT / ".github/scripts/render-readme-media.swift").read_text(encoding="utf-8")
+        seed = helper.split("func seedClipboard() throws", 1)[1].split("func verifyClipboardDemo()", 1)[0]
+        self.assertIn('"ClipboardShelfRecordingPausedV1" as CFString, true', seed)
+        verify = helper.split("func verifyClipboardDemo() throws", 1)[1].split("func seedEchoType()", 1)[0]
+        self.assertIn("Set(entries.map(\\.text)) == expectedTexts", verify)
+        self.assertIn("entries.filter(\\.isPinned).count == 2", verify)
+        self.assertIn('HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard', self.capture)
+        self.assertIn('HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo', self.capture)
+        self.assertIn('open --env "HOME=$DEMO_HOME" "$APP"', self.capture)
+        self.assertIn('"$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist"', self.capture)
+        launch = (ROOT / "Sources/main.swift").read_text(encoding="utf-8")
+        pasteboard_check = launch.split("@objc private func checkPasteboard()", 1)[1].split("func clipboardShelfViewController", 1)[0]
+        self.assertLess(pasteboard_check.index("guard !isRecordingPaused"), pasteboard_check.index("pasteboard.string(forType: .string)"))
+
+    def test_shelf_capture_has_no_desktop_cleanup_and_outputs_stay_under_runner_temp(self) -> None:
+        for forbidden in (
+            "system_profiler",
+            "killall Finder",
+            'close every window',
+            "CreateDesktop false",
+            "set picture to",
+        ):
+            self.assertNotIn(forbidden, self.capture)
+        shelf = self.capture.split('  clipboard-shelf)\n    prepare_clipboard_demo', 1)[1].split('\n    ;;', 1)[0]
+        self.assertIn('capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-light.png"', shelf)
+        self.assertIn('capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-dark.png"', shelf)
+        self.assertNotIn("$ROOT/docs/images/clipboard-shelf-", shelf)
+        runtime = (ROOT / ".github/scripts/readme-media-runtime.sh").read_text(encoding="utf-8")
+        self.assertIn('local gif="$ARTIFACT_DIR/$SLUG-hero.gif"', runtime)
+        self.assertIn('validate_readme_media_capture.py" geometry', self.capture)
+        self.assertIn('validate_readme_media_capture.py" png', self.capture)
+        success = self.workflow.split("if: success()", 1)[1]
+        self.assertIn('${{ runner.temp }}/readme-media/clipboard-shelf-hero.mp4', success)
+        self.assertNotIn("readme-media/*", success)
+        self.assertNotIn("docs/images/", success)
+
+    def test_new_geometry_pixel_and_release_fixtures_run_in_validation_workflows_only(self) -> None:
+        for name in (
+            "test-readme-media-capture-validation.py",
+            "test-readme-media-release.py",
+        ):
+            self.assertIn(name, self.workflow)
+            self.assertIn(name, MACOS_CI.read_text(encoding="utf-8"))
+        macos_ci = MACOS_CI.read_text(encoding="utf-8")
+        self.assertNotIn("capture-readme-media.sh", macos_ci)
+        self.assertIn("workflow_dispatch", self.workflow)
+        self.assertNotIn("  pull_request:", self.workflow)
+
     def test_sanitized_geometry_snapshot_is_uploaded_only_on_failure(self) -> None:
         self.assertIn("name: Upload sanitized geometry diagnostics on failure", self.workflow)
         failure_step = self.workflow.split("name: Upload sanitized geometry diagnostics on failure", 1)[1].split(
@@ -109,12 +193,14 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         status_snapshot_fn = capture.split("status_item_snapshot() {", 1)[1].split("if [[ -L", 1)[0]
         self.assertIn("every menu bar item of menu bar 1", status_snapshot_fn)
         self.assertIn("every menu bar item of menu bar 2", status_snapshot_fn)
+        self.assertIn("if matches is 0 then", status_snapshot_fn)
         self.assertIn("if matches is not 1", status_snapshot_fn)
         self.assertIn('swift "$HELPER" pid "$APP"', capture)
         self.assertIn('swift "$HELPER" windows-pid "$APP_PID"', capture)
         self.assertIn('swift "$HELPER" display-geometry', capture)
         self.assertIn("build_readme_media_geometry_snapshot.py", capture)
         self.assertIn("strict_ax_adjacency_predicate_failed_after_12_polls", capture)
+        self.assertIn("capture_pixel_validation_failed", capture)
         self.assertIn("geometry-snapshot.json", capture)
         snapshot_fn = capture.split("write_geometry_snapshot() {", 1)[1].split("capture_exit_diagnostics() {", 1)[0]
         self.assertNotIn("screencapture", snapshot_fn)

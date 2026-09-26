@@ -187,7 +187,7 @@ capture_video_region() {
 
   local raw="$RUNNER_TEMP/readme-capture.mov"
   local mp4="$ARTIFACT_DIR/$SLUG-hero.mp4"
-  local gif="$ROOT/docs/images/$SLUG-hero.gif"
+  local gif="$ARTIFACT_DIR/$SLUG-hero.gif"
   local capture_log="$ARTIFACT_DIR/video-capture.log"
   local crop_filter=''
   rm -f "$raw" "$mp4" "$gif"
