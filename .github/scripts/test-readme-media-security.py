@@ -19,7 +19,7 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
     def test_capture_job_is_dispatch_only_on_trusted_main(self) -> None:
         trigger = self.workflow.split("permissions:", maxsplit=1)[0]
         self.assertEqual(trigger, "name: README media\n\non:\n  workflow_dispatch:\n\n")
-        self.assertIn("if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", self.workflow)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && github.repository == '9phfr6dsw4-dotcom/clipboard-shelf' && github.ref == 'refs/heads/main'", self.workflow)
 
     def test_github_token_is_scoped_to_release_download_before_application_launch(self) -> None:
         copy_token = self.capture.index('RELEASE_TOKEN="${GH_TOKEN:?GH_TOKEN is required}"')
