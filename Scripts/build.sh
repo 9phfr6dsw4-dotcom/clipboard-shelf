@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.0.1"
+VERSION="1.0.2"
 BUILD_DIR="$ROOT/.build"
 DIST_DIR="$ROOT/dist"
 APP="$DIST_DIR/Clipboard Shelf.app"
@@ -14,8 +14,11 @@ SDK="$(xcrun --sdk macosx --show-sdk-path)"
 rm -rf "$BUILD_DIR" "$DIST_DIR"
 mkdir -p "$BUILD_DIR" "$MACOS_DIR" "$RESOURCES_DIR"
 
-python3 "$ROOT/Scripts/generate_icon.py" "$BUILD_DIR/AppIcon.iconset"
+python3 "$ROOT/Scripts/test_generate_icon.py"
+python3 "$ROOT/Scripts/generate_icon.py" "$BUILD_DIR/AppIcon.iconset" "$ROOT/Resources/AppIcon-1024.png"
 iconutil -c icns "$BUILD_DIR/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns"
+cp "$ROOT/Resources/AppIcon-1024.png" "$RESOURCES_DIR/AppIcon-1024.png"
+python3 "$ROOT/Scripts/test_icon_package.py" "$ROOT/Resources/AppIcon-1024.png" "$APP"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 
 COMMON_ARGS=(
