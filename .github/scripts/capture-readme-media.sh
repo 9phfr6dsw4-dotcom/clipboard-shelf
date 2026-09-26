@@ -45,6 +45,61 @@ case "$APP_KEY" in
   captiongrab) SLUG='captiongrab' ;;
 esac
 
+status_item_snapshot() {
+  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" 2>/dev/null <<'APPLESCRIPT'
+on run argv
+  set appName to item 1 of argv
+  set statusLabel to item 2 of argv
+  try
+    tell application "System Events"
+      tell process appName
+        set statusItem to missing value
+        set matches to 0
+        try
+          repeat with candidate in every menu bar item of menu bar 2
+            set itemName to ""
+            set itemDescription to ""
+            try
+              set itemName to name of candidate as text
+            end try
+            try
+              set itemDescription to description of candidate as text
+            end try
+            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
+              set statusItem to candidate
+              set matches to matches + 1
+            end if
+          end repeat
+        end try
+        try
+          repeat with candidate in every menu bar item of menu bar 1
+            set itemName to ""
+            set itemDescription to ""
+            try
+              set itemName to name of candidate as text
+            end try
+            try
+              set itemDescription to description of candidate as text
+            end try
+            if itemName contains appName or itemName contains statusLabel or itemDescription contains statusLabel then
+              set statusItem to candidate
+              set matches to matches + 1
+            end if
+          end repeat
+        end try
+        if matches is not 1 then return ((matches as integer) as text) & "|0|0|0|0"
+        set itemPosition to position of statusItem
+        set itemSize to size of statusItem
+        return "1|" & ((item 1 of itemPosition as integer) as text) & "|" & ((item 2 of itemPosition as integer) as text) & "|" & ((item 1 of itemSize as integer) as text) & "|" & ((item 2 of itemSize as integer) as text)
+      end tell
+    end tell
+  on error
+    return "-1|0|0|0|0"
+  end try
+end run
+APPLESCRIPT
+}
+
 if [[ -L "$ROOT/docs" || -L "$ROOT/docs/images" ]]; then
   printf 'Refusing to clear README media through a symlinked docs path.\n' >&2
   exit 1
@@ -55,8 +110,51 @@ IMAGE_DIR_REAL="$(cd "$ROOT/docs/images" && pwd -P)"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 [[ "$RUNNER_TEMP" == /* ]] || { printf 'RUNNER_TEMP must be an absolute path.\n' >&2; exit 2; }
 ARTIFACT_DIR="$RUNNER_TEMP/readme-media"
+DIAG_DIR="$ARTIFACT_DIR/diagnostics"
 EXTRACT_DIR="$RUNNER_TEMP/release-app"
+APP_PID=''
+GEOMETRY_REJECTION_REASON='capture_failed_before_geometry_check'
 python3 "$ROOT/.github/scripts/prepare-readme-media-artifacts.py" "$RUNNER_TEMP" "$ARTIFACT_DIR"
+[[ ! -L "$DIAG_DIR" ]] || { printf 'Refusing symlinked diagnostic directory.\n' >&2; exit 1; }
+mkdir -p "$DIAG_DIR"
+
+write_geometry_snapshot() {
+  local reason="${1:-diagnostic_collection_failed}" status_item display_info windows_path windows_tsv
+  case "$reason" in
+    status_item_click_failed|strict_ax_adjacency_predicate_failed_after_12_polls|capture_failed_before_geometry_check|capture_failed_after_geometry_check|diagnostic_collection_failed) ;;
+    *) reason='diagnostic_collection_failed' ;;
+  esac
+  status_item='-1|0|0|0|0'
+  if [[ "$APP_KEY" == clipboard-shelf ]]; then
+    status_item="$(status_item_snapshot 2>/dev/null)" || status_item='-1|0|0|0|0'
+  fi
+  display_info="$(swift "$HELPER" display-geometry 2>/dev/null)" || display_info=''
+  windows_path="$DIAG_DIR/app-windows.tsv"
+  printf 'windowID\tPID\tlayer\talpha\tx\ty\twidth\theight\n' > "$windows_path"
+  if [[ ! "$APP_PID" =~ ^[0-9]+$ && -n "${APP:-}" && -d "${APP:-}" ]]; then
+    APP_PID="$(swift "$HELPER" pid "$APP" 2>/dev/null)" || APP_PID=''
+  fi
+  if [[ "$APP_PID" =~ ^[0-9]+$ ]]; then
+    if windows_tsv="$(swift "$HELPER" windows-pid "$APP_PID" 2>/dev/null)"; then
+      printf '%s\n' "$windows_tsv" > "$windows_path"
+    fi
+  fi
+  if ! python3 "$ROOT/.github/scripts/build_readme_media_geometry_snapshot.py" --reason "$reason" --app-pid "${APP_PID:-}" --status-item "$status_item" --windows "$windows_path" --display-info "$display_info" --output "$DIAG_DIR/geometry-snapshot.json" >/dev/null 2>&1; then
+    printf '%s\n' '{"schema":"clipboard-shelf-capture-geometry/v1","app_pid":null,"status_item":{"match_count":-1,"frame":null},"app_owned_windows":[],"display":null,"rejection_reason":"diagnostic_collection_failed","collection_errors":["snapshot_write_failed"]}' > "$DIAG_DIR/geometry-snapshot.json"
+  fi
+}
+
+capture_exit_diagnostics() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )) && [[ "$APP_KEY" == clipboard-shelf ]]; then
+    set +e
+    write_geometry_snapshot "$GEOMETRY_REJECTION_REASON"
+  fi
+  exit "$status"
+}
+trap capture_exit_diagnostics EXIT
+
 for runner_child in "$EXTRACT_DIR" "$RUNNER_TEMP/release-download"; do
   [[ ! -L "$runner_child" ]] || { printf 'Refusing symlinked RUNNER_TEMP child: %s\n' "$runner_child" >&2; exit 1; }
 done
@@ -95,8 +193,11 @@ ICON="$ROOT/docs/images/$SLUG-icon.png"
 test -s "$ICON"
 
 show_menu_popover() {
-  if menu_geometry >/dev/null 2>&1; then return 0; fi
-  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" <<'APPLESCRIPT' || return 1
+  if menu_geometry >/dev/null 2>&1; then
+    GEOMETRY_REJECTION_REASON='capture_failed_after_geometry_check'
+    return 0
+  fi
+  osascript - "$WINDOW_OWNER" "$STATUS_LABEL" <<'APPLESCRIPT' || { GEOMETRY_REJECTION_REASON='status_item_click_failed'; return 1; }
 on run argv
   set appName to item 1 of argv
   set statusLabel to item 2 of argv
@@ -147,10 +248,14 @@ end run
 APPLESCRIPT
   local attempt
   for attempt in {1..12}; do
-    if menu_geometry >/dev/null 2>&1; then return 0; fi
+    if menu_geometry >/dev/null 2>&1; then
+      GEOMETRY_REJECTION_REASON='capture_failed_after_geometry_check'
+      return 0
+    fi
     sleep 0.25
   done
-  printf 'The app popover did not appear adjacent to its identified status item.\n' >&2
+  GEOMETRY_REJECTION_REASON='strict_ax_adjacency_predicate_failed_after_12_polls'
+  printf 'Strict app-window adjacency check did not identify a unique popover after 12 polls.\n' >&2
   return 1
 }
 

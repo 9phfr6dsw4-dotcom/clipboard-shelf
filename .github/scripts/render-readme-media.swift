@@ -259,6 +259,40 @@ func printVisibleWindows() throws {
     }
 }
 
+func printWindowsForPID(_ pid: Int32) throws {
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let rows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+        throw MediaError(description: "Could not enumerate on-screen windows")
+    }
+    print("windowID\tPID\tlayer\talpha\tx\ty\twidth\theight")
+    for row in rows {
+        guard let ownerPID = (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+              ownerPID == pid,
+              let id = row[kCGWindowNumber as String] as? CGWindowID,
+              let bounds = row[kCGWindowBounds as String] as? [String: Any],
+              let x = (bounds["X"] as? NSNumber)?.doubleValue,
+              let y = (bounds["Y"] as? NSNumber)?.doubleValue,
+              let width = (bounds["Width"] as? NSNumber)?.doubleValue,
+              let height = (bounds["Height"] as? NSNumber)?.doubleValue else { continue }
+        let layer = row[kCGWindowLayer as String] as? Int ?? -1
+        let alpha = row[kCGWindowAlpha as String] as? Double ?? 0
+        print("\(id)\t\(ownerPID)\t\(layer)\t\(alpha)\t\(Int(x))\t\(Int(y))\t\(Int(width))\t\(Int(height))")
+    }
+}
+
+func printAppPID(_ appPath: String) throws {
+    let url = URL(fileURLWithPath: appPath).standardizedFileURL
+    guard let bundle = Bundle(url: url), let identifier = bundle.bundleIdentifier else {
+        throw MediaError(description: "Could not read the exact app bundle identifier")
+    }
+    let matches = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+        .filter { $0.bundleURL?.standardizedFileURL == url && !$0.isTerminated }
+    guard matches.count == 1, let app = matches.first else {
+        throw MediaError(description: "Expected one running process at the exact app bundle path")
+    }
+    print(app.processIdentifier)
+}
+
 func displayScale(_ display: CGDirectDisplayID) -> Int {
     let bounds = CGDisplayBounds(display)
     let pixelWidth = CGFloat(CGDisplayPixelsWide(display))
@@ -270,6 +304,12 @@ func printDisplayInfo() {
     let display = CGMainDisplayID()
     let bounds = CGDisplayBounds(display)
     print("frame=\(Int(bounds.width))x\(Int(bounds.height))|pixels=\(CGDisplayPixelsWide(display))x\(CGDisplayPixelsHigh(display))|scale=\(displayScale(display))")
+}
+
+func printDisplayGeometry() {
+    let display = CGMainDisplayID()
+    let bounds = CGDisplayBounds(display)
+    print("frame=\(Int(bounds.minX)),\(Int(bounds.minY)),\(Int(bounds.width)),\(Int(bounds.height))|pixels=\(CGDisplayPixelsWide(display))x\(CGDisplayPixelsHigh(display))|scale=\(displayScale(display))")
 }
 
 func printDisplayModes() {
@@ -285,7 +325,7 @@ func printDisplayModes() {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    fputs("Usage: render-readme-media.swift seed-clipboard | seed-echotype | window OWNER | windows | wallpaper OUT | social OUT ICON NAME TAGLINE SCREENSHOT_OR_EMPTY | profile-social OUT ICON1 ICON2 ICON3 ICON4 | banner OUT ICON1 ICON2 ICON3 ICON4\n", stderr)
+    fputs("Usage: render-readme-media.swift seed-clipboard | seed-echotype | window OWNER | windows | windows-pid PID | pid APP_BUNDLE | display-geometry | wallpaper OUT | social OUT ICON NAME TAGLINE SCREENSHOT_OR_EMPTY | profile-social OUT ICON1 ICON2 ICON3 ICON4 | banner OUT ICON1 ICON2 ICON3 ICON4\n", stderr)
     exit(2)
 }
 
@@ -303,9 +343,18 @@ do {
     case "windows":
         guard args.count == 1 else { throw MediaError(description: "windows takes no extra arguments") }
         try printVisibleWindows()
+    case "windows-pid":
+        guard args.count == 2, let pid = Int32(args[1]) else { throw MediaError(description: "windows-pid needs a numeric PID") }
+        try printWindowsForPID(pid)
+    case "pid":
+        guard args.count == 2 else { throw MediaError(description: "pid needs an app bundle path") }
+        try printAppPID(args[1])
     case "display-info":
         guard args.count == 1 else { throw MediaError(description: "display-info takes no extra arguments") }
         printDisplayInfo()
+    case "display-geometry":
+        guard args.count == 1 else { throw MediaError(description: "display-geometry takes no extra arguments") }
+        printDisplayGeometry()
     case "display-modes":
         guard args.count == 1 else { throw MediaError(description: "display-modes takes no extra arguments") }
         printDisplayInfo()

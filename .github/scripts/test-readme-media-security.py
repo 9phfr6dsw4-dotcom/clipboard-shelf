@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from pathlib import Path
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / ".github/scripts"))
+import build_readme_media_geometry_snapshot as geometry_snapshot
 WORKFLOW = ROOT / ".github/workflows/readme-media.yml"
 MACOS_CI = ROOT / ".github/workflows/macos-ci.yml"
 CAPTURE = ROOT / ".github/scripts/capture-readme-media.sh"
@@ -83,6 +90,120 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         clear_outputs = self.capture.index('rm -f "$ROOT/docs/images/$SLUG-light.png"')
         self.assertLess(artifact_setup, clear_outputs)
         self.assertNotIn('rm -rf "$ROOT/docs/images"', self.capture)
+
+    def test_sanitized_geometry_snapshot_is_uploaded_only_on_failure(self) -> None:
+        self.assertIn("name: Upload sanitized geometry diagnostics on failure", self.workflow)
+        failure_step = self.workflow.split("name: Upload sanitized geometry diagnostics on failure", 1)[1].split(
+            "      - uses: actions/upload-artifact@v4", 1
+        )[0]
+        self.assertIn("if: failure()", failure_step)
+        self.assertIn("path: ${{ runner.temp }}/readme-media/diagnostics/geometry-snapshot.json", failure_step)
+        self.assertIn("retention-days: 3", failure_step)
+        self.assertNotIn(".png", failure_step)
+        self.assertNotIn("windows.tsv", failure_step)
+
+    def test_geometry_snapshot_contains_only_shelf_pid_geometry_and_rejection(self) -> None:
+        capture = self.capture
+        self.assertIn("trap capture_exit_diagnostics EXIT", capture)
+        self.assertIn("status_item_snapshot", capture)
+        status_snapshot_fn = capture.split("status_item_snapshot() {", 1)[1].split("if [[ -L", 1)[0]
+        self.assertIn("every menu bar item of menu bar 1", status_snapshot_fn)
+        self.assertIn("every menu bar item of menu bar 2", status_snapshot_fn)
+        self.assertIn("if matches is not 1", status_snapshot_fn)
+        self.assertIn('swift "$HELPER" pid "$APP"', capture)
+        self.assertIn('swift "$HELPER" windows-pid "$APP_PID"', capture)
+        self.assertIn('swift "$HELPER" display-geometry', capture)
+        self.assertIn("build_readme_media_geometry_snapshot.py", capture)
+        self.assertIn("strict_ax_adjacency_predicate_failed_after_12_polls", capture)
+        self.assertIn("geometry-snapshot.json", capture)
+        snapshot_fn = capture.split("write_geometry_snapshot() {", 1)[1].split("capture_exit_diagnostics() {", 1)[0]
+        self.assertNotIn("screencapture", snapshot_fn)
+        self.assertNotIn("CGWindowListCopyWindowInfo", snapshot_fn)
+        helper = (ROOT / ".github/scripts/render-readme-media.swift").read_text(encoding="utf-8")
+        pid_windows = helper.split("func printWindowsForPID", 1)[1].split("func printAppPID", 1)[0]
+        self.assertIn("ownerPID == pid", pid_windows)
+        self.assertNotIn("kCGWindowName", pid_windows)
+        self.assertNotIn("kCGWindowOwnerName", pid_windows)
+        self.assertIn(r"windowID\tPID\tlayer", pid_windows)
+
+    def test_strict_adjacency_limits_are_unchanged_and_not_widened(self) -> None:
+        helper = (ROOT / ".github/scripts/capture-readme-media.sh").read_text(encoding="utf-8")
+        self.assertIn("verticalGap >= -8 and verticalGap <= 120", helper)
+        self.assertIn("candidateLeft < statusRight + 80", helper)
+        self.assertIn("candidateLeft + candidateWidth > statusLeft - 80", helper)
+        self.assertIn("candidateWidth >= 240 and candidateHeight >= 240", helper)
+
+    def test_geometry_snapshot_redacts_titles_and_rejects_unrelated_pids(self) -> None:
+        scratch_root = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TMPDIR") or "/tmp")
+        with tempfile.TemporaryDirectory(dir=scratch_root) as temporary:
+            inventory = Path(temporary) / "windows.tsv"
+            header = "\t".join(["windowID", "PID", "layer", "alpha", "x", "y", "width", "height"])
+            inventory.write_text(header + "\n" + "\t".join(["71", "4242", "0", "1.0", "100", "24", "430", "500"]) + "\n", encoding="utf-8")
+            snapshot = geometry_snapshot.make_snapshot(
+                reason="strict_ax_adjacency_predicate_failed_after_12_polls",
+                app_pid_raw="4242",
+                status_item_raw="1|800|0|28|24",
+                windows_path=inventory,
+                display_info_raw="frame=0,0,1024,768|pixels=1024x768|scale=1",
+            )
+            self.assertEqual(snapshot["status_item"], {"match_count": 1, "frame": [800, 0, 28, 24]})
+            self.assertEqual(snapshot["app_owned_windows"], [{
+                "window_id": 71, "pid": 4242, "layer": 0, "alpha": 1.0, "frame": [100, 24, 430, 500]
+            }])
+            self.assertEqual(snapshot["display"]["frame_points"], [0, 0, 1024, 768])
+            self.assertEqual(snapshot["display"]["scale"], 1)
+            self.assertEqual(snapshot["rejection_reason"], "strict_ax_adjacency_predicate_failed_after_12_polls")
+            snapshot_path = Path(temporary) / "geometry-snapshot.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / ".github/scripts/build_readme_media_geometry_snapshot.py"),
+                    "--reason", "strict_ax_adjacency_predicate_failed_after_12_polls",
+                    "--app-pid", "4242",
+                    "--status-item", "1|800|0|28|24",
+                    "--windows", str(inventory),
+                    "--display-info", "frame=0,0,1024,768|pixels=1024x768|scale=1",
+                    "--output", str(snapshot_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(snapshot_path.read_text(encoding="utf-8")), snapshot)
+            serialized = json.dumps(snapshot)
+            for forbidden in ("window_title", "owner_name", "clipboard_text", "Sensitive Clipboard Text"):
+                self.assertNotIn(forbidden, serialized)
+
+            inventory.write_text(
+                header + "\tname\n" + "\t".join(["72", "9999", "0", "1.0", "1", "2", "430", "500", "Sensitive Clipboard Text"]) + "\n",
+                encoding="utf-8",
+            )
+            rejected = geometry_snapshot.make_snapshot(
+                reason="strict_ax_adjacency_predicate_failed_after_12_polls",
+                app_pid_raw="4242",
+                status_item_raw="2|0|0|0|0",
+                windows_path=inventory,
+                display_info_raw="frame=0,0,1024,768|pixels=1024x768|scale=1",
+            )
+            rejected_json = json.dumps(rejected)
+            self.assertEqual(rejected["app_owned_windows"], [])
+            self.assertIsNone(rejected["status_item"]["frame"])
+            self.assertIn("invalid_app_window_inventory", rejected["collection_errors"])
+            self.assertNotIn("Sensitive Clipboard Text", rejected_json)
+
+    def test_capture_diagnostics_document_the_unproven_geometry_blocker(self) -> None:
+        doc = (ROOT / "docs/readme-media-capture-diagnostics.md").read_text(encoding="utf-8")
+        self.assertIn("36270162668", doc)
+        self.assertIn("unproven", doc)
+        self.assertIn("window titles", doc)
+        self.assertIn("not safe to retry", doc)
+        self.assertIn("pixel dimensions", doc)
+        self.assertIn("asset digest/sidecar", doc)
+        self.assertIn("release tag", doc)
+        self.assertIn("NSPasteboard", doc)
+        self.assertIn("Finder and Terminal window", doc)
+        self.assertIn("No qualifying GIF/MP4 artifact", doc)
 
 
 if __name__ == "__main__":

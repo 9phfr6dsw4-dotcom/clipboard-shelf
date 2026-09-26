@@ -26,6 +26,14 @@ jobs:
           APP_KEY: clipboard-shelf
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/capture-readme-media.sh
+      - name: Upload sanitized geometry diagnostics on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: clipboard-shelf-geometry-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/readme-media/diagnostics/geometry-snapshot.json
+          if-no-files-found: warn
+          retention-days: 3
       - uses: actions/upload-artifact@v4
         if: success()
         with:
