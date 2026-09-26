@@ -8,6 +8,8 @@
 
 <p align="center"><a href="https://github.com/9phfr6dsw4-dotcom/clipboard-shelf/releases/latest"><strong>Download the latest release</strong></a> · macOS 13+ · Apple silicon and Intel</p>
 
+<p align="center"><img src="docs/images/clipboard-shelf-popover.png" width="640" alt="Clipboard Shelf popover with search and pause controls, recent synthetic text entries with pin controls, and a six-item count"></p>
+
 ## Features
 
 - Case-insensitively search the 20 most recent copied text items and copy one back with a click.
