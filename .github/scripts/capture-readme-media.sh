@@ -41,6 +41,9 @@ case "$APP_KEY" in
     ;;
   *) printf 'Unknown APP_KEY: %s\n' "$APP_KEY" >&2; exit 2 ;;
 esac
+# The other APP_KEY paths below are shared with sibling repositories and do not meet this
+# repository's isolation rules (for example, EchoType seeds files under the real home).
+[[ "$APP_KEY" == clipboard-shelf ]] || { printf 'This repository captures only Clipboard Shelf; refusing APP_KEY=%s.\n' "$APP_KEY" >&2; exit 2; }
 
 # Exact accessibility description of the launched app's status item. For Clipboard Shelf
 # it also proves the app read the paused fixture: it reads "Clipboard Shelf" when recording.
@@ -115,28 +118,25 @@ capture_exit_diagnostics() {
   local status=$?
   trap - EXIT
   set +e
-  if ! restore_appearance; then
-    printf 'Could not restore the runner appearance snapshot (dark=%s).\n' "$ORIGINAL_DARK_MODE" >&2
-    (( status != 0 )) || status=1
-  fi
+  # Order: diagnostics need the app alive; stopping it and checking the real domain must not
+  # wait behind the appearance restore.
   if (( status != 0 )) && [[ "$APP_KEY" == clipboard-shelf ]]; then
     write_geometry_snapshot "$GEOMETRY_REJECTION_REASON"
   fi
   if [[ "$APP_KEY" == clipboard-shelf && -n "$CLIPBOARD_REAL_HOME" ]]; then
-    # SIGKILL the exact launched PID: a normal quit runs saveHistory into the real domain.
-    if [[ ! "$APP_PID" =~ ^[0-9]+$ && -n "${APP:-}" && -d "${APP:-}" ]]; then
-      APP_PID="$(swift "$HELPER" pid "$APP" 2>/dev/null)" || APP_PID=''
-    fi
-    if [[ "$APP_PID" =~ ^[0-9]+$ ]]; then
-      kill -KILL "$APP_PID" 2>/dev/null
-    elif [[ -n "${APP:-}" ]] && pgrep -f -- "$APP/Contents/MacOS/" >/dev/null 2>&1; then
-      printf 'Could not bind the running Clipboard Shelf to one PID to stop it; failing the capture.\n' >&2
+    # SIGKILL every instance of the extracted executable: a normal quit runs saveHistory.
+    if ! stop_app_instances "$APP/Contents/MacOS/ClipboardShelf"; then
+      printf 'Could not stop Clipboard Shelf; failing the capture.\n' >&2
       (( status != 0 )) || status=1
     fi
-    if ! clipboard_domain_absent "$CLIPBOARD_REAL_HOME" local.clipboardshelf; then
+    if ! app_state_absent "$CLIPBOARD_REAL_HOME" local.clipboardshelf; then
       printf 'Clipboard Shelf state reached the real preference domain; failing the capture.\n' >&2
       (( status != 0 )) || status=1
     fi
+  fi
+  if ! restore_appearance; then
+    printf 'Could not restore the runner appearance snapshot (dark=%s).\n' "$ORIGINAL_DARK_MODE" >&2
+    (( status != 0 )) || status=1
   fi
   exit "$status"
 }

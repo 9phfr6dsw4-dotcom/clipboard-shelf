@@ -24,6 +24,12 @@ jobs:
           python3 .github/scripts/test-readme-media-capture-validation.py
           python3 .github/scripts/test-readme-media-release.py
           python3 .github/scripts/test-readme-media-popover-selection.py
+      - name: Verify isolated synthetic clipboard fixture on this runner image
+        timeout-minutes: 10
+        run: bash .github/scripts/verify-clipboard-demo-isolation.sh
+      - name: Verify PID-bound popover geometry with a synthetic fixture on this runner image
+        timeout-minutes: 15
+        run: bash .github/scripts/verify-status-popover-geometry.sh
       - name: Capture the published release app and prepare README media
         env:
           APP_KEY: clipboard-shelf

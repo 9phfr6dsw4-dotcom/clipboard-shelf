@@ -31,7 +31,7 @@ jobs:
         run: bash .github/scripts/verify-clipboard-demo-isolation.sh
 
       - name: Verify PID-bound popover geometry with a synthetic fixture
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: bash .github/scripts/verify-status-popover-geometry.sh
 
       - name: Run Swift core tests

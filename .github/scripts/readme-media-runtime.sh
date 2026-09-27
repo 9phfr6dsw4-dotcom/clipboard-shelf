@@ -70,20 +70,86 @@ real_user_home() {
   printf '%s\n' "$home"
 }
 
-# Succeeds only if the real user's preference domain has no plist (plain, ByHost, or dangling
-# symlink) and cfprefsd reports no values for it.
+# Prints the key names (never values) cfprefsd holds for a domain, one per line. Only the
+# explicit "does not exist" answer counts as an empty domain; any other failure fails closed.
+preference_domain_keys() {
+  local domain="${1:-}" error
+  [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
+  if ! error="$(defaults read "$domain" 2>&1 >/dev/null)"; then
+    [[ "$error" == *"Domain $domain does not exist"* ]] && return 0
+    printf 'Could not read the %s preference domain.\n' "$domain" >&2
+    return 1
+  fi
+  defaults export "$domain" - | plist_key_names -
+}
+
+# Prints the top-level key names of a property list file (or - for stdin), one per line.
+plist_key_names() {
+  python3 -c '
+import plistlib, sys
+source = sys.stdin.buffer if sys.argv[1] == "-" else open(sys.argv[1], "rb")
+data = plistlib.loads(source.read())
+if not isinstance(data, dict) or any(not isinstance(k, str) or not k.isprintable() for k in data):
+    sys.exit("unexpected property list shape")
+print("\n".join(sorted(data)))
+' "$1" | sed '/^$/d'
+}
+
+# Strict precondition: the real user's preference domain has no plist (plain, ByHost, or
+# dangling symlink) and cfprefsd holds no values for it.
 clipboard_domain_absent() {
-  local real_home="${1:-}" domain="${2:-}" plist
+  local real_home="${1:-}" domain="${2:-}" plist keys
   [[ "$real_home" == /* && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
   plist="$real_home/Library/Preferences/$domain.plist"
   if [[ -e "$plist" || -L "$plist" ]] || compgen -G "$real_home/Library/Preferences/ByHost/$domain.*.plist" >/dev/null; then
     printf 'A real preference file exists for %s.\n' "$domain" >&2
     return 1
   fi
-  if defaults read "$domain" >/dev/null 2>&1; then
+  keys="$(preference_domain_keys "$domain")" || return 1
+  if [[ -n "$keys" ]]; then
     printf 'The real preference domain %s holds values.\n' "$domain" >&2
     return 1
   fi
+}
+
+# Postcondition after the app ran: the real domain may hold only AppKit's own status-item
+# bookkeeping keys (which any menu-bar app launch can create), never app state. Key names
+# are logged; values never are.
+APPKIT_STATUS_ITEM_KEY='^NSStatusItem (Preferred Position|Visible|VisibleCC) [A-Za-z0-9_-]+$'
+app_state_absent() {
+  local real_home="${1:-}" domain="${2:-}" plist keys file file_keys unexpected appkit
+  [[ "$real_home" == /* && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
+  plist="$real_home/Library/Preferences/$domain.plist"
+  [[ ! -L "$plist" ]] || { printf 'The real %s preference file is a symlink.\n' "$domain" >&2; return 1; }
+  keys="$(preference_domain_keys "$domain")" || return 1
+  for file in "$plist" "$real_home/Library/Preferences/ByHost/$domain".*.plist; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    [[ -f "$file" && ! -L "$file" ]] || { printf 'Unexpected preference file type for %s.\n' "$domain" >&2; return 1; }
+    file_keys="$(plist_key_names "$file")" || { printf 'Unreadable preference file for %s.\n' "$domain" >&2; return 1; }
+    keys="$keys"$'\n'"$file_keys"
+  done
+  unexpected="$(printf '%s\n' "$keys" | sed '/^$/d' | grep -Ev "$APPKIT_STATUS_ITEM_KEY" | sort -u | paste -sd, -)" || true
+  appkit="$(printf '%s\n' "$keys" | grep -E "$APPKIT_STATUS_ITEM_KEY" | sort -u | paste -sd, -)" || true
+  [[ -z "$appkit" ]] || printf 'AppKit status-item keys in the real %s domain (names only): %s\n' "$domain" "$appkit" >&2
+  if [[ -n "$unexpected" ]]; then
+    printf 'App state reached the real %s domain (key names only): %s\n' "$domain" "$unexpected" >&2
+    return 1
+  fi
+}
+
+# SIGKILLs every process whose command line starts with the exact executable path (a normal
+# quit would let the app save state), then fails if any instance survives.
+stop_app_instances() {
+  local executable="${1:-}" pattern attempt
+  [[ "$executable" == /* ]] || return 2
+  pattern="^$(printf '%s' "$executable" | sed 's/[][\.*^$+?(){}|]/\\&/g')( |\$)"
+  pkill -KILL -f -- "$pattern" 2>/dev/null
+  for attempt in {1..20}; do
+    pgrep -f -- "$pattern" >/dev/null 2>&1 || return 0
+    sleep 0.25
+  done
+  printf 'An instance of %s survived SIGKILL.\n' "$executable" >&2
+  return 1
 }
 
 # Loads the synthetic Clipboard Shelf fixture as NSArgumentDomain launch arguments into
@@ -187,34 +253,6 @@ video_region_filter() {
 
 animate_app() {
   case "$APP_KEY" in
-    clipboard-shelf)
-      show_menu_popover
-      osascript <<'APPLESCRIPT'
-tell application "System Events"
-  tell process "ClipboardShelf"
-    set frontmost to true
-    click text field 1 of window 1
-    keystroke "b"
-    delay 0.25
-    keystroke "u"
-    delay 0.25
-    keystroke "i"
-    delay 0.25
-    keystroke "l"
-    delay 0.25
-    keystroke "d"
-    delay 0.5
-    set value of text field 1 of window 1 to ""
-    delay 0.5
-    click button "Pin clipboard item" of row 3 of table 1 of scroll area 1 of window 1
-    delay 0.5
-    click row 4 of table 1 of scroll area 1 of window 1
-    delay 1
-  end tell
-end tell
-APPLESCRIPT
-      show_menu_popover
-      ;;
     quick-drop-zone)
       show_menu_popover
       open_cleanup_review

@@ -83,6 +83,28 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertIn("appearance preferences", self.runtime)
         self.assertNotIn("Could not switch appearance", self.capture)
 
+    def test_capture_job_proves_isolation_and_geometry_on_its_own_runner_first(self) -> None:
+        capture_step = self.workflow.index("run: bash .github/scripts/capture-readme-media.sh")
+        for check in ("verify-clipboard-demo-isolation.sh", "verify-status-popover-geometry.sh"):
+            self.assertLess(self.workflow.index(f"run: bash .github/scripts/{check}"), capture_step)
+
+    def test_only_clipboard_shelf_can_be_captured_from_this_repository(self) -> None:
+        guard = self.capture.index('[[ "$APP_KEY" == clipboard-shelf ]] || {')
+        self.assertLess(guard, self.capture.index("prepare-readme-media-artifacts.py"))
+        animate = self.runtime.split("animate_app() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("clipboard-shelf)", animate)
+        self.assertNotIn("ClipboardShelf", animate)
+
+    def test_status_description_match_is_exact(self) -> None:
+        status_script = (ROOT / ".github/scripts/readme-media-status-item.applescript").read_text(encoding="utf-8")
+        considering = status_script.index("considering case, diacriticals, hyphens, punctuation and white space")
+        self.assertLess(considering, status_script.index("(itemDescription as text) is expectedDescription"))
+        verifier = (ROOT / ".github/scripts/verify-status-popover-geometry.sh").read_text(encoding="utf-8")
+        self.assertIn("'popover fixture — recording paused'", verifier)
+        self.assertIn('reason="$(selection_reason "$PID_B")"', verifier)
+        self.assertIn('app_state_absent "$REAL_HOME" "$DOMAIN"', verifier)
+        self.assertNotIn("status_popover_geometry 1 ", verifier)
+
     def test_original_appearance_is_snapshotted_and_restored_on_every_exit(self) -> None:
         snapshot = self.capture.index('ORIGINAL_DARK_MODE="$(get_appearance)"')
         self.assertLess(snapshot, self.capture.index("set_appearance false"))
@@ -145,7 +167,11 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         for printed in ('print("-ClipboardShelfHistoryV1")', 'print("-ClipboardShelfRecordingPausedV1")', 'print("YES")'):
             self.assertIn(printed, arguments)
         self.assertIn("clipboardDemoFixture.enumerated()", arguments)
-        self.assertEqual(helper.count(', true),'), 2)  # exactly two pinned synthetic entries
+        fixture = helper.split("let clipboardDemoFixture: [(text: String, isPinned: Bool)] = [", 1)[1].split("\n]\n", 1)[0]
+        entries = re.findall(r'^    \("(.+)", (true|false)\),?$', fixture, flags=re.MULTILINE)
+        self.assertEqual(len(entries), 8)
+        self.assertEqual(len(fixture.strip().splitlines()), 8)
+        self.assertEqual(sum(pinned == "true" for _, pinned in entries), 2)
 
         prepare = self.capture.split("prepare_clipboard_demo() {", 1)[1].split("\n}\n", 1)[0]
         self.assertLess(prepare.index("clipboard_domain_absent"), prepare.index('CLIPBOARD_REAL_HOME="$real_home"'))
@@ -156,12 +182,28 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         for stale in ("DEMO_HOME", "CFFIXED_USER_HOME", "verify-clipboard-demo"):
             self.assertNotIn(stale, self.capture)
         trap_fn = self.capture.split("capture_exit_diagnostics() {", 1)[1].split("\n}\n", 1)[0]
-        self.assertLess(trap_fn.index('kill -KILL "$APP_PID"'), trap_fn.index("clipboard_domain_absent"))
+        snapshot = trap_fn.index("write_geometry_snapshot")
+        stop = trap_fn.index('stop_app_instances "$APP/Contents/MacOS/ClipboardShelf"')
+        postcondition = trap_fn.index('app_state_absent "$CLIPBOARD_REAL_HOME" local.clipboardshelf')
+        restore = trap_fn.index("restore_appearance")
+        self.assertLess(snapshot, stop)
+        self.assertLess(stop, postcondition)
+        self.assertLess(postcondition, restore)
+        stopper = self.runtime.split("stop_app_instances() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn('pkill -KILL -f -- "$pattern"', stopper)
+        self.assertIn('pgrep -f -- "$pattern"', stopper)
+        self.assertIn('pattern="^$(printf', stopper)
 
         self.assertIn('dscl . -read "/Users/$(id -un)" NFSHomeDirectory', self.runtime)
         detector = self.runtime.split("clipboard_domain_absent() {", 1)[1].split("\n}\n", 1)[0]
-        for check in ('/Library/Preferences/$domain.plist', "ByHost/$domain.*.plist", '-L "$plist"', 'defaults read "$domain"'):
+        for check in ('/Library/Preferences/$domain.plist', "ByHost/$domain.*.plist", '-L "$plist"', 'preference_domain_keys "$domain"'):
             self.assertIn(check, detector)
+        keys = self.runtime.split("preference_domain_keys() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn('[[ "$error" == *"Domain $domain does not exist"* ]] && return 0', keys)
+        self.assertIn('defaults export "$domain" - | plist_key_names -', keys)
+        postcondition_fn = self.runtime.split("app_state_absent() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("(key names only)", postcondition_fn)
+        self.assertIn("APPKIT_STATUS_ITEM_KEY='^NSStatusItem (Preferred Position|Visible|VisibleCC) [A-Za-z0-9_-]+$'", self.runtime)
 
         macos_ci = MACOS_CI.read_text(encoding="utf-8")
         self.assertIn("run: bash .github/scripts/verify-clipboard-demo-isolation.sh", macos_ci)

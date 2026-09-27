@@ -137,36 +137,95 @@ if restore_appearance >/dev/null 2>&1; then
   exit 1
 fi
 
-# Leak detector for the app's real preference domain (defaults and the file system are mocked).
+# Real preference-domain checks (defaults and the file system are mocked; key names only).
 fake_home="$(mktemp -d)"
 trap 'rm -f "$osascript_calls"; rm -rf "$fake_home"' EXIT
 mkdir -p "$fake_home/Library/Preferences/ByHost"
-mock_defaults_status=1
-defaults() { [[ "$1" == read && "$2" == local.clipboardshelf ]] || return 64; return "$mock_defaults_status"; }
-clipboard_domain_absent "$fake_home" local.clipboardshelf || { printf '%s\n' 'FAIL: accept an absent real preference domain' >&2; exit 1; }
-if clipboard_domain_absent relative/home local.clipboardshelf >/dev/null 2>&1; then
-  printf '%s\n' 'FAIL: reject a relative real home' >&2
-  exit 1
-fi
-for planted in "Preferences/local.clipboardshelf.plist" "Preferences/ByHost/local.clipboardshelf.0123-ABCD.plist"; do
-  : > "$fake_home/Library/$planted"
-  if clipboard_domain_absent "$fake_home" local.clipboardshelf >/dev/null 2>&1; then
-    printf 'FAIL: detect planted preference file %s\n' "$planted" >&2
+write_plist() { python3 - "$@" <<'PY_PLIST'
+import plistlib, sys
+path, keys = sys.argv[1], sys.argv[2:]
+with open(path, "wb") as stream:
+    plistlib.dump({key: "Sensitive Clipboard Text" for key in keys}, stream)
+PY_PLIST
+}
+mock_domain_state=absent
+mock_domain_keys=()
+defaults() {
+  [[ "$2" == local.clipboardshelf ]] || return 64
+  case "$1:$mock_domain_state" in
+    read:absent) printf 'Domain %s does not exist\n' "$2" >&2; return 1 ;;
+    read:error) printf 'Could not connect to cfprefsd\n' >&2; return 1 ;;
+    read:present) printf '{ values }\n'; return 0 ;;
+    export:present)
+      [[ "$3" == - ]] || return 64
+      write_plist /dev/stdout ${mock_domain_keys[@]+"${mock_domain_keys[@]}"} ;;
+    *) return 64 ;;
+  esac
+}
+expect_rejected() {
+  if "$@" >/dev/null 2>&1; then
+    printf 'FAIL: %s\n' "$label" >&2
     exit 1
   fi
+}
+reset_domain() { mock_domain_state=absent; mock_domain_keys=(); rm -rf "$fake_home/Library/Preferences"; mkdir -p "$fake_home/Library/Preferences/ByHost"; }
+
+clipboard_domain_absent "$fake_home" local.clipboardshelf || { printf '%s\n' 'FAIL: accept an absent real preference domain' >&2; exit 1; }
+label='reject a relative real home'; expect_rejected clipboard_domain_absent relative/home local.clipboardshelf
+for planted in "Preferences/local.clipboardshelf.plist" "Preferences/ByHost/local.clipboardshelf.0123-ABCD.plist"; do
+  : > "$fake_home/Library/$planted"
+  label="detect planted preference file $planted"; expect_rejected clipboard_domain_absent "$fake_home" local.clipboardshelf
   rm -f "$fake_home/Library/$planted"
 done
 ln -s /nonexistent "$fake_home/Library/Preferences/local.clipboardshelf.plist"
-if clipboard_domain_absent "$fake_home" local.clipboardshelf >/dev/null 2>&1; then
-  printf '%s\n' 'FAIL: detect a dangling preference symlink' >&2
-  exit 1
-fi
-rm -f "$fake_home/Library/Preferences/local.clipboardshelf.plist"
-mock_defaults_status=0
-if clipboard_domain_absent "$fake_home" local.clipboardshelf >/dev/null 2>&1; then
-  printf '%s\n' 'FAIL: detect a populated domain that has no plist on disk yet' >&2
-  exit 1
-fi
+label='detect a dangling preference symlink'; expect_rejected clipboard_domain_absent "$fake_home" local.clipboardshelf
+reset_domain
+mock_domain_state=present; mock_domain_keys=("NSStatusItem Preferred Position Item-0")
+label='strict precondition rejects even AppKit-only values'; expect_rejected clipboard_domain_absent "$fake_home" local.clipboardshelf
+mock_domain_state=error
+label='a defaults failure other than "does not exist" is not absence'; expect_rejected clipboard_domain_absent "$fake_home" local.clipboardshelf
+
+# Postcondition: only AppKit status-item bookkeeping keys are tolerated, and only their names are logged.
+reset_domain
+app_state_absent "$fake_home" local.clipboardshelf || { printf '%s\n' 'FAIL: accept an absent domain after the run' >&2; exit 1; }
+mock_domain_state=present; mock_domain_keys=("NSStatusItem Preferred Position Item-0" "NSStatusItem VisibleCC Item-0")
+appkit_log="$(app_state_absent "$fake_home" local.clipboardshelf 2>&1)" || { printf '%s\n' 'FAIL: tolerate AppKit status-item keys' >&2; exit 1; }
+[[ "$appkit_log" == *'NSStatusItem Preferred Position Item-0'* && "$appkit_log" != *Sensitive* ]] || { printf 'FAIL: log AppKit key names only: %s\n' "$appkit_log" >&2; exit 1; }
+for leaked in ClipboardShelfHistoryV1 ClipboardShelfRecordingPausedV1 "NSStatusItem Preferred Position Item-0 extra" NSWindow; do
+  mock_domain_keys=("NSStatusItem Visible Item-0" "$leaked")
+  label="reject key $leaked"; expect_rejected app_state_absent "$fake_home" local.clipboardshelf
+  leak_log="$(app_state_absent "$fake_home" local.clipboardshelf 2>&1)" || true
+  [[ "$leak_log" != *Sensitive* ]] || { printf '%s\n' 'FAIL: never log preference values' >&2; exit 1; }
+done
+reset_domain
+write_plist "$fake_home/Library/Preferences/local.clipboardshelf.plist" "NSStatusItem Preferred Position Item-0"
+app_state_absent "$fake_home" local.clipboardshelf 2>/dev/null || { printf '%s\n' 'FAIL: tolerate an on-disk AppKit-only plist' >&2; exit 1; }
+write_plist "$fake_home/Library/Preferences/ByHost/local.clipboardshelf.0123-ABCD.plist" ClipboardShelfHistoryV1
+label='reject app keys in a ByHost plist'; expect_rejected app_state_absent "$fake_home" local.clipboardshelf
+reset_domain
+printf 'not a plist' > "$fake_home/Library/Preferences/local.clipboardshelf.plist"
+label='reject an unreadable plist'; expect_rejected app_state_absent "$fake_home" local.clipboardshelf
+reset_domain
+ln -s /nonexistent "$fake_home/Library/Preferences/local.clipboardshelf.plist"
+label='reject a preference symlink after the run'; expect_rejected app_state_absent "$fake_home" local.clipboardshelf
+reset_domain
+mock_domain_state=error
+label='reject an unreadable domain after the run'; expect_rejected app_state_absent "$fake_home" local.clipboardshelf
+reset_domain
+
+# Stopping the launched app kills every instance of the exact extracted executable.
+pkill_calls="$(mktemp)"
+trap 'rm -f "$osascript_calls" "$pkill_calls"; rm -rf "$fake_home"' EXIT
+mock_survivors=0
+pkill() { printf '%s\n' "$*" >> "$pkill_calls"; return 1; }
+pgrep() { (( mock_survivors > 0 )); }
+stop_app_instances '/tmp/run/release-app/Clipboard Shelf.app/Contents/MacOS/ClipboardShelf' || { printf '%s\n' 'FAIL: stop app instances' >&2; exit 1; }
+assert_equal '-KILL -f -- ^/tmp/run/release-app/Clipboard Shelf\.app/Contents/MacOS/ClipboardShelf( |$)' "$(tail -n 1 "$pkill_calls")" 'anchored, escaped executable pattern'
+mock_survivors=1
+label='fail when an instance survives SIGKILL'; expect_rejected stop_app_instances '/tmp/run/release-app/Clipboard Shelf.app/Contents/MacOS/ClipboardShelf'
+mock_survivors=0
+label='reject a relative executable path'; expect_rejected stop_app_instances 'Clipboard Shelf.app/Contents/MacOS/ClipboardShelf'
+unset -f pkill pgrep
 
 # Launch-argument fixture loader accepts only the exact four-argument shape.
 HELPER=/unused
@@ -197,8 +256,10 @@ fi
 mock_status_output='762|3|24|24'
 mock_status_rc=0
 mock_inventory=$'windowID\tPID\tlayer\talpha\tx\ty\twidth\theight\n32\t4428\t25\t1.0\t546\t26\t456\t526'
+status_calls="$(mktemp)"
+trap 'rm -f "$osascript_calls" "$pkill_calls" "$status_calls"; rm -rf "$fake_home"' EXIT
 osascript() {
-  [[ "$1" == */readme-media-status-item.applescript && "$2" == frame && "$3" == 4428 && "$4" == 'Clipboard Shelf — recording paused' ]] || return 64
+  printf '%s\n' "${1##*/}|$2|$3|$4" >> "$status_calls"
   printf '%s\n' "$mock_status_output"
   return "$mock_status_rc"
 }
@@ -211,13 +272,13 @@ swift() {
   esac
 }
 assert_equal '546|26|456|526|762|3|24|24|0' "$(status_popover_geometry 4428 'Clipboard Shelf — recording paused')" 'select the observed macOS 26 popover for the launched PID'
+assert_equal 'readme-media-status-item.applescript|frame|4428|Clipboard Shelf — recording paused' "$(tail -n 1 "$status_calls")" 'status item is looked up by the exact PID and description'
 geometry_rejected() {
   if status_popover_geometry "$@" >/dev/null 2>&1; then
     printf 'FAIL: %s\n' "$label" >&2
     exit 1
   fi
 }
-label='reject a different status description'; geometry_rejected 4428 'Clipboard Shelf'
 label='reject a missing PID'; geometry_rejected '' 'Clipboard Shelf — recording paused'
 mock_status_rc=1; label='fail closed when the status item query fails'; geometry_rejected 4428 'Clipboard Shelf — recording paused'
 mock_status_rc=0; mock_status_output='762|3|24'; label='reject a malformed status frame'; geometry_rejected 4428 'Clipboard Shelf — recording paused'
@@ -226,4 +287,4 @@ label='fail closed before the popover window exists'; geometry_rejected 4428 'Cl
 mock_inventory=$'windowID\tPID\tlayer\talpha\tx\ty\twidth\theight\n32\t4428\t25\t1.0\t546\t26\t456\t526\n33\t4428\t25\t1.0\t500\t30\t300\t300'
 label='fail closed on ambiguous popover candidates'; geometry_rejected 4428 'Clipboard Shelf — recording paused'
 
-printf '%s\n' 'PASS: video crop, duration, appearance, preference-leak, fixture-argument, and popover-geometry cases'
+printf '%s\n' 'PASS: video crop, duration, appearance, preference-domain, app-stop, fixture-argument, and popover-geometry cases'

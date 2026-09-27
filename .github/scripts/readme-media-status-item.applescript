@@ -20,7 +20,11 @@ on run argv
 			repeat with barIndex from 1 to barCount
 				repeat with candidate in (every menu bar item of menu bar barIndex)
 					set itemDescription to description of candidate
-					if itemDescription is not missing value and (itemDescription as text) is expectedDescription then set end of statusMatches to contents of candidate
+					if itemDescription is not missing value then
+						considering case, diacriticals, hyphens, punctuation and white space
+							if (itemDescription as text) is expectedDescription then set end of statusMatches to contents of candidate
+						end considering
+					end if
 				end repeat
 			end repeat
 			if (count of statusMatches) is not 1 then error "status_item_not_unique:" & (count of statusMatches) number 1003

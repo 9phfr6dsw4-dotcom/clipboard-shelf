@@ -103,15 +103,20 @@ def select_popover_from_inventory(
 
 MAX_PNG_BYTES = 64 * 1024 * 1024
 PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+PNG_BIT_DEPTHS = {0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8}, 4: {8, 16}, 6: {8, 16}}
 
 
-def png_dimensions(path: Path) -> tuple[int, int]:
-    """Validate a complete, non-interlaced PNG and return its pixel dimensions.
+class _PngLayout:
+    def __init__(self, width: int, height: int, bit_depth: int, color_type: int, idat: bytes) -> None:
+        self.width, self.height, self.bit_depth, self.color_type, self.idat = width, height, bit_depth, color_type, idat
 
-    Every chunk's length and CRC is checked, IHDR must come first and IEND last with nothing
-    after it, and the concatenated IDAT stream must decompress to exactly one filter byte
-    (0-4) plus the packed row bytes for every scanline. Filters are not reversed, so pixel
-    values are not inspected.
+
+def _read_png_layout(path: Path) -> _PngLayout:
+    """Walk every chunk without inflating image data.
+
+    Requires exactly one IHDR first, a valid colour-type/bit-depth pair, no interlacing, a
+    PLTE before the image data for palette images, one run of consecutive IDAT chunks, and
+    an empty IEND last with nothing after it. Every chunk CRC must match.
     """
     try:
         if path.is_symlink() or not path.is_file():
@@ -148,33 +153,60 @@ def png_dimensions(path: Path) -> tuple[int, int]:
         offset = body_end + 4
         if kind == b"IEND":
             break
-    if offset != len(data) or not chunks or chunks[0][0] != b"IHDR" or chunks[-1] != (b"IEND", b""):
+    kinds = [kind for kind, _ in chunks]
+    if offset != len(data) or kinds[0] != b"IHDR" or kinds.count(b"IHDR") != 1 or chunks[-1] != (b"IEND", b""):
+        raise CaptureValidationError("invalid_png_structure")
+    idat_positions = [index for index, kind in enumerate(kinds) if kind == b"IDAT"]
+    if not idat_positions or idat_positions != list(range(idat_positions[0], idat_positions[-1] + 1)):
         raise CaptureValidationError("invalid_png_structure")
 
     bit_depth, color_type, compression, filter_method, interlace = chunks[0][1][8:13]
-    if color_type not in PNG_CHANNELS or compression != 0 or filter_method != 0 or interlace != 0:
+    if (
+        bit_depth not in PNG_BIT_DEPTHS.get(color_type, set())
+        or compression != 0
+        or filter_method != 0
+        or interlace != 0
+        or (color_type == 3 and b"PLTE" not in kinds[:idat_positions[0]])
+    ):
         raise CaptureValidationError("invalid_png_structure")
-    row_bytes = (width * bit_depth * PNG_CHANNELS[color_type] + 7) // 8
-    idat = b"".join(body for kind, body in chunks if kind == b"IDAT")
+    idat = b"".join(chunks[index][1] for index in idat_positions)
+    return _PngLayout(width, height, bit_depth, color_type, idat)
+
+
+def _check_png_image_data(layout: _PngLayout) -> None:
+    """Inflate IDAT to exactly one filter byte (0-4) plus the packed row bytes per scanline.
+
+    Filters are not reversed, so pixel values are not inspected.
+    """
+    row_bytes = (layout.width * layout.bit_depth * PNG_CHANNELS[layout.color_type] + 7) // 8
+    expected = layout.height * (row_bytes + 1)
     try:
         decompressor = zlib.decompressobj()
-        rows = decompressor.decompress(idat, height * (row_bytes + 1) + 1)
-        complete = decompressor.eof and not decompressor.unconsumed_tail
+        rows = decompressor.decompress(layout.idat, expected + 1)
+        complete = decompressor.eof and not decompressor.unconsumed_tail and not decompressor.unused_data
     except zlib.error:
         raise CaptureValidationError("invalid_png_structure") from None
-    if not complete or len(rows) != height * (row_bytes + 1):
+    if not complete or len(rows) != expected:
         raise CaptureValidationError("invalid_png_structure")
-    if any(rows[row * (row_bytes + 1)] > 4 for row in range(height)):
+    if any(rows[row * (row_bytes + 1)] > 4 for row in range(layout.height)):
         raise CaptureValidationError("invalid_png_structure")
-    return width, height
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    """Validate a complete PNG (chunks and image data) and return its pixel dimensions."""
+    layout = _read_png_layout(path)
+    _check_png_image_data(layout)
+    return layout.width, layout.height
 
 
 def validate_png_dimensions(path: Path, *, expected_width: int, expected_height: int) -> None:
     if type(expected_width) is not int or type(expected_height) is not int or min(expected_width, expected_height) <= 0:
         raise CaptureValidationError("invalid_expected_png_dimensions")
-    actual = png_dimensions(path)
-    if actual != (expected_width, expected_height):
+    layout = _read_png_layout(path)
+    # Compare the declared size before inflating, so a huge declared image is never expanded.
+    if (layout.width, layout.height) != (expected_width, expected_height):
         raise CaptureValidationError("png_dimensions_mismatch")
+    _check_png_image_data(layout)
 
 
 def main() -> int:
