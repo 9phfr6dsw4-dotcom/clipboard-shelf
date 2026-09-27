@@ -21,20 +21,34 @@ jobs:
           python3 .github/scripts/test-readme-media-artifacts.py
           python3 .github/scripts/test-readme-media-security.py
           python3 .github/scripts/test-readme-media-demo.py
+          python3 .github/scripts/test-readme-media-capture-validation.py
+          python3 .github/scripts/test-readme-media-release.py
+          python3 .github/scripts/test-readme-media-popover-selection.py
+      - name: Verify isolated synthetic clipboard fixture on this runner image
+        timeout-minutes: 10
+        run: bash .github/scripts/verify-clipboard-demo-isolation.sh
+      - name: Verify PID-bound popover geometry with a synthetic fixture on this runner image
+        timeout-minutes: 15
+        run: bash .github/scripts/verify-status-popover-geometry.sh
       - name: Capture the published release app and prepare README media
         env:
           APP_KEY: clipboard-shelf
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/capture-readme-media.sh
+      - name: Upload sanitized geometry diagnostics on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: clipboard-shelf-geometry-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/readme-media/diagnostics/geometry-snapshot.json
+          if-no-files-found: warn
+          retention-days: 3
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: clipboard-shelf-readme-media
+          name: clipboard-shelf-readme-media-${{ github.run_id }}
           path: |
-            docs/images/clipboard-shelf-light.png
-            docs/images/clipboard-shelf-dark.png
-            docs/images/clipboard-shelf-hero.gif
-            docs/images/social-preview.png
-            ${{ runner.temp }}/readme-media/*
-          if-no-files-found: warn
+            ${{ runner.temp }}/readme-media/clipboard-shelf-light.png
+            ${{ runner.temp }}/readme-media/clipboard-shelf-dark.png
+          if-no-files-found: error
           retention-days: 14

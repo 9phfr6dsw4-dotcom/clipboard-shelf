@@ -26,6 +26,14 @@ jobs:
           test "$passwords_id" = "com.apple.Passwords"
           test "$keychain_id" = "com.apple.keychainaccess"
 
+      - name: Verify isolated synthetic clipboard fixture
+        timeout-minutes: 10
+        run: bash .github/scripts/verify-clipboard-demo-isolation.sh
+
+      - name: Verify PID-bound popover geometry with a synthetic fixture
+        timeout-minutes: 15
+        run: bash .github/scripts/verify-status-popover-geometry.sh
+
       - name: Run Swift core tests
         run: bash Scripts/test.sh
 
@@ -58,3 +66,6 @@ jobs:
           python3 .github/scripts/test-readme-media-artifacts.py
           python3 .github/scripts/test-readme-media-security.py
           python3 .github/scripts/test-readme-media-demo.py
+          python3 .github/scripts/test-readme-media-capture-validation.py
+          python3 .github/scripts/test-readme-media-release.py
+          python3 .github/scripts/test-readme-media-popover-selection.py
