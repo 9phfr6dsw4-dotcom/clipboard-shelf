@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+README_MEDIA_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 set_appearance() {
   local requested="${1:-}" expected actual
@@ -41,6 +42,155 @@ APPLESCRIPT
     printf 'Appearance verification failed: requested=%s actual=%s.\n' "$expected" "$actual" >&2
     return 1
   fi
+}
+
+get_appearance() {
+  local actual
+  actual="$(osascript -e 'tell application "System Events" to tell appearance preferences to get dark mode')" || return 1
+  case "$actual" in
+    true|false) printf '%s\n' "$actual" ;;
+    *) printf 'Unreadable appearance state: %s\n' "$actual" >&2; return 1 ;;
+  esac
+}
+
+# Restores the appearance snapshotted in ORIGINAL_DARK_MODE; a no-op when nothing was snapshotted.
+restore_appearance() {
+  [[ -n "${ORIGINAL_DARK_MODE:-}" ]] || return 0
+  case "$ORIGINAL_DARK_MODE" in
+    true|false) set_appearance "$ORIGINAL_DARK_MODE" ;;
+    *) printf 'Refusing to restore a corrupted appearance snapshot.\n' >&2; return 1 ;;
+  esac
+}
+
+# The account's real home from directory services; HOME can be overridden and cfprefsd ignores it.
+real_user_home() {
+  local home
+  home="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '$1 == "NFSHomeDirectory:" { print $2 }')" || return 1
+  [[ "$home" == /* && -d "$home" ]] || { printf 'Could not resolve the real user home.\n' >&2; return 1; }
+  printf '%s\n' "$home"
+}
+
+# Prints the key names (never values) cfprefsd holds for a domain, one per line. Only the
+# explicit "does not exist" answer counts as an empty domain; any other failure fails closed.
+preference_domain_keys() {
+  local domain="${1:-}" error
+  [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
+  if ! error="$(defaults read "$domain" 2>&1 >/dev/null)"; then
+    [[ "$error" == *"Domain $domain does not exist"* ]] && return 0
+    printf 'Could not read the %s preference domain.\n' "$domain" >&2
+    return 1
+  fi
+  defaults export "$domain" - | plist_key_names -
+}
+
+# Prints the top-level key names of a property list file (or - for stdin), one per line.
+plist_key_names() {
+  python3 -c '
+import plistlib, sys
+source = sys.stdin.buffer if sys.argv[1] == "-" else open(sys.argv[1], "rb")
+data = plistlib.loads(source.read())
+if not isinstance(data, dict) or any(not isinstance(k, str) or not k.isprintable() for k in data):
+    sys.exit("unexpected property list shape")
+print("\n".join(sorted(data)))
+' "$1" | sed '/^$/d'
+}
+
+# Strict precondition: the real user's preference domain has no plist (plain, ByHost, or
+# dangling symlink) and cfprefsd holds no values for it.
+clipboard_domain_absent() {
+  local real_home="${1:-}" domain="${2:-}" plist keys
+  [[ "$real_home" == /* && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
+  plist="$real_home/Library/Preferences/$domain.plist"
+  if [[ -e "$plist" || -L "$plist" ]] || compgen -G "$real_home/Library/Preferences/ByHost/$domain.*.plist" >/dev/null; then
+    printf 'A real preference file exists for %s.\n' "$domain" >&2
+    return 1
+  fi
+  keys="$(preference_domain_keys "$domain")" || return 1
+  if [[ -n "$keys" ]]; then
+    printf 'The real preference domain %s holds values.\n' "$domain" >&2
+    return 1
+  fi
+}
+
+# Postcondition after the app ran: the real domain may hold only AppKit's own status-item
+# bookkeeping keys (which any menu-bar app launch can create), never app state. Key names
+# are logged; values never are.
+APPKIT_STATUS_ITEM_KEY='^NSStatusItem (Preferred Position|Visible|VisibleCC) [A-Za-z0-9_-]+$'
+app_state_absent() {
+  local real_home="${1:-}" domain="${2:-}" plist keys file file_keys unexpected appkit
+  [[ "$real_home" == /* && "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || return 2
+  plist="$real_home/Library/Preferences/$domain.plist"
+  [[ ! -L "$plist" ]] || { printf 'The real %s preference file is a symlink.\n' "$domain" >&2; return 1; }
+  keys="$(preference_domain_keys "$domain")" || return 1
+  for file in "$plist" "$real_home/Library/Preferences/ByHost/$domain".*.plist; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    [[ -f "$file" && ! -L "$file" ]] || { printf 'Unexpected preference file type for %s.\n' "$domain" >&2; return 1; }
+    file_keys="$(plist_key_names "$file")" || { printf 'Unreadable preference file for %s.\n' "$domain" >&2; return 1; }
+    keys="$keys"$'\n'"$file_keys"
+  done
+  unexpected="$(printf '%s\n' "$keys" | sed '/^$/d' | grep -Ev "$APPKIT_STATUS_ITEM_KEY" | sort -u | paste -sd, -)" || true
+  appkit="$(printf '%s\n' "$keys" | grep -E "$APPKIT_STATUS_ITEM_KEY" | sort -u | paste -sd, -)" || true
+  [[ -z "$appkit" ]] || printf 'AppKit status-item keys in the real %s domain (names only): %s\n' "$domain" "$appkit" >&2
+  if [[ -n "$unexpected" ]]; then
+    printf 'App state reached the real %s domain (key names only): %s\n' "$domain" "$unexpected" >&2
+    return 1
+  fi
+}
+
+# SIGKILLs every process whose command line starts with the exact executable path (a normal
+# quit would let the app save state), then fails if any instance survives.
+stop_app_instances() {
+  local executable="${1:-}" pattern attempt
+  [[ "$executable" == /* ]] || return 2
+  pattern="^$(printf '%s' "$executable" | sed 's/[][\.*^$+?(){}|]/\\&/g')( |\$)"
+  pkill -KILL -f -- "$pattern" 2>/dev/null
+  for attempt in {1..20}; do
+    pgrep -f -- "$pattern" >/dev/null 2>&1 || return 0
+    sleep 0.25
+  done
+  printf 'An instance of %s survived SIGKILL.\n' "$executable" >&2
+  return 1
+}
+
+# Loads the synthetic Clipboard Shelf fixture as NSArgumentDomain launch arguments into
+# CLIPBOARD_DEMO_ARGS. Launch arguments are never persisted, unlike any CFPreferences write.
+load_clipboard_demo_args() {
+  local output line data_literal='^<[0-9a-f]+>$'
+  CLIPBOARD_DEMO_ARGS=()
+  output="$(swift "$HELPER" clipboard-demo-args)" || return 1
+  while IFS= read -r line; do CLIPBOARD_DEMO_ARGS+=("$line"); done <<< "$output"
+  if (( ${#CLIPBOARD_DEMO_ARGS[@]} != 4 )) \
+    || [[ "${CLIPBOARD_DEMO_ARGS[0]}" != -ClipboardShelfHistoryV1 ]] \
+    || [[ ! "${CLIPBOARD_DEMO_ARGS[1]}" =~ $data_literal ]] \
+    || [[ "${CLIPBOARD_DEMO_ARGS[2]}" != -ClipboardShelfRecordingPausedV1 ]] \
+    || [[ "${CLIPBOARD_DEMO_ARGS[3]}" != YES ]]; then
+    CLIPBOARD_DEMO_ARGS=()
+    printf 'Synthetic fixture arguments are malformed.\n' >&2
+    return 1
+  fi
+}
+
+# Prints pop_x|pop_y|pop_w|pop_h|status_x|status_y|status_w|status_h|0 for the popover of
+# the launched PID. The status item is matched by PID and exact accessibility description;
+# the popover comes from that PID's complete CGWindowList inventory, because System Events
+# exposes no NSPopover windows. Absent, malformed, or ambiguous data fails closed.
+status_popover_geometry() {
+  local pid="${1:-}" description="${2:-}" status inventory display_info frame popover
+  local status_x status_y status_w status_h
+  local frame_re='^[0-9]{1,6}[|][0-9]{1,6}[|][0-9]{1,6}[|][0-9]{1,6}$'
+  [[ "$pid" =~ ^[0-9]+$ && -n "$description" ]] || return 1
+  status="$(osascript "$README_MEDIA_SCRIPTS/readme-media-status-item.applescript" frame "$pid" "$description")" || return 1
+  [[ "$status" =~ $frame_re ]] || return 1
+  IFS='|' read -r status_x status_y status_w status_h <<< "$status"
+  inventory="$(swift "$HELPER" windows-pid "$pid")" || return 1
+  display_info="$(swift "$HELPER" display-info)" || return 1
+  frame="${display_info%%|*}"
+  frame="${frame#frame=}"
+  [[ "$frame" =~ ^[0-9]{1,6}x[0-9]{1,6}$ ]] || return 1
+  popover="$(printf '%s\n' "$inventory" | python3 "$README_MEDIA_SCRIPTS/validate_readme_media_capture.py" select-popover \
+    --pid "$pid" --status "$status_x" "$status_y" "$status_w" "$status_h" --display "${frame%x*}" "${frame#*x}")" || return 1
+  [[ "$popover" =~ $frame_re ]] || return 1
+  printf '%s|%s|0\n' "$popover" "$status"
 }
 
 duration_is_acceptable() {
@@ -103,34 +253,6 @@ video_region_filter() {
 
 animate_app() {
   case "$APP_KEY" in
-    clipboard-shelf)
-      show_menu_popover
-      osascript <<'APPLESCRIPT'
-tell application "System Events"
-  tell process "ClipboardShelf"
-    set frontmost to true
-    click text field 1 of window 1
-    keystroke "b"
-    delay 0.25
-    keystroke "u"
-    delay 0.25
-    keystroke "i"
-    delay 0.25
-    keystroke "l"
-    delay 0.25
-    keystroke "d"
-    delay 0.5
-    set value of text field 1 of window 1 to ""
-    delay 0.5
-    click button "Pin clipboard item" of row 3 of table 1 of scroll area 1 of window 1
-    delay 0.5
-    click row 4 of table 1 of scroll area 1 of window 1
-    delay 1
-  end tell
-end tell
-APPLESCRIPT
-      show_menu_popover
-      ;;
     quick-drop-zone)
       show_menu_popover
       open_cleanup_review
@@ -187,7 +309,7 @@ capture_video_region() {
 
   local raw="$RUNNER_TEMP/readme-capture.mov"
   local mp4="$ARTIFACT_DIR/$SLUG-hero.mp4"
-  local gif="$ROOT/docs/images/$SLUG-hero.gif"
+  local gif="$ARTIFACT_DIR/$SLUG-hero.gif"
   local capture_log="$ARTIFACT_DIR/video-capture.log"
   local crop_filter=''
   rm -f "$raw" "$mp4" "$gif"
