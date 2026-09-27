@@ -7,6 +7,7 @@ import struct
 import sys
 import tempfile
 import unittest
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".github/scripts"))
@@ -19,6 +20,18 @@ from validate_readme_media_capture import (
 TEST_ROOT = Path(os.environ.get("RUNNER_TEMP") or "")
 if not TEST_ROOT.is_absolute() or not TEST_ROOT.is_dir():
     raise SystemExit("Set RUNNER_TEMP to an existing scratch directory for tests")
+
+
+def chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def synthetic_png(width: int, height: int, *, rows: bytes | None = None, interlace: int = 0) -> bytes:
+    """A complete 8-bit RGBA PNG: signature, IHDR, one IDAT, IEND."""
+    if rows is None:
+        rows = b"".join(b"\x00" + b"\x40\x80\xc0\xff" * width for _ in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, interlace)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
 class CaptureValidationTests(unittest.TestCase):
@@ -51,16 +64,36 @@ class CaptureValidationTests(unittest.TestCase):
 
     def test_capture_png_must_match_measured_bounds_times_scale(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as temporary:
-            png = Path(temporary) / "synthetic-header-only.png"
-            png.write_bytes(
-                b"\x89PNG\r\n\x1a\n"
-                + struct.pack(">I", 13)
-                + b"IHDR"
-                + struct.pack(">IIBBBBB", 840, 1200, 8, 6, 0, 0, 0)
-            )
-            validate_png_dimensions(png, expected_width=840, expected_height=1200)
+            png = Path(temporary) / "synthetic.png"
+            png.write_bytes(synthetic_png(84, 120))
+            validate_png_dimensions(png, expected_width=84, expected_height=120)
             with self.assertRaisesRegex(CaptureValidationError, "png_dimensions_mismatch"):
-                validate_png_dimensions(png, expected_width=840, expected_height=1198)
+                validate_png_dimensions(png, expected_width=84, expected_height=118)
+
+    def test_structurally_incomplete_png_fails_closed(self) -> None:
+        good = synthetic_png(84, 120)
+        signature_and_ihdr = good[: 8 + 25]
+        idat_offset = good.index(b"IDAT")
+        corrupt_crc = bytearray(good)
+        corrupt_crc[idat_offset + 10] ^= 0xFF
+        short_rows = b"".join(b"\x00" + b"\x00" * 84 * 4 for _ in range(119))
+        bad_filter = b"".join(b"\x07" + b"\x00" * 84 * 4 for _ in range(120))
+        cases = {
+            "header only": signature_and_ihdr,
+            "truncated": good[:-20],
+            "missing IEND": good[: good.index(b"IEND") - 4],
+            "trailing bytes": good + b"extra",
+            "corrupt chunk CRC": bytes(corrupt_crc),
+            "missing scanlines": synthetic_png(84, 120, rows=short_rows),
+            "invalid filter byte": synthetic_png(84, 120, rows=bad_filter),
+            "interlaced": synthetic_png(84, 120, interlace=1),
+        }
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as temporary:
+            png = Path(temporary) / "candidate.png"
+            for label, data in cases.items():
+                png.write_bytes(data)
+                with self.subTest(label), self.assertRaisesRegex(CaptureValidationError, "invalid_png_structure"):
+                    validate_png_dimensions(png, expected_width=84, expected_height=120)
 
     def test_malformed_or_missing_png_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as temporary:

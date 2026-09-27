@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,7 +66,7 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         release_marker = 'if [[ "$APP_KEY" == clipboard-shelf ]]; then\n  printf \'Verifying pinned published release'
         shelf_release = self.capture.split(release_marker, 1)[1].split("\nelse\n", 1)[0]
         clear_token = shelf_release.index("unset RELEASE_TOKEN GH_TOKEN")
-        first_launch = self.capture.index('open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"')
+        first_launch = self.capture.index('open -n "$APP" --args "${CLIPBOARD_DEMO_ARGS[@]}"')
         self.assertLess(copy_token, unexport_token)
         self.assertLess(unexport_token, unset_inherited_token)
         self.assertLess(unset_inherited_token, release_view)
@@ -81,6 +82,15 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertIn("set_appearance()", self.runtime)
         self.assertIn("appearance preferences", self.runtime)
         self.assertNotIn("Could not switch appearance", self.capture)
+
+    def test_original_appearance_is_snapshotted_and_restored_on_every_exit(self) -> None:
+        snapshot = self.capture.index('ORIGINAL_DARK_MODE="$(get_appearance)"')
+        self.assertLess(snapshot, self.capture.index("set_appearance false"))
+        self.assertLess(snapshot, self.capture.index("set_appearance true"))
+        trap_fn = self.capture.split("capture_exit_diagnostics() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("restore_appearance", trap_fn)
+        self.assertLess(self.capture.index("capture_exit_diagnostics() {"), self.capture.index("trap capture_exit_diagnostics EXIT"))
+        self.assertLess(self.capture.index('source "$ROOT/.github/scripts/readme-media-runtime.sh"'), self.capture.index("trap capture_exit_diagnostics EXIT"))
 
     def test_demo_files_are_created_without_home_or_system_writes(self) -> None:
         self.assertIn("prepare-readme-media-demo.py", self.capture)
@@ -128,29 +138,56 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
 
     def test_clipboard_demo_is_isolated_paused_and_only_uses_synthetic_history(self) -> None:
         helper = (ROOT / ".github/scripts/render-readme-media.swift").read_text(encoding="utf-8")
-        seed = helper.split("func seedClipboard() throws", 1)[1].split("func verifyClipboardDemo()", 1)[0]
-        self.assertIn('"ClipboardShelfRecordingPausedV1" as CFString, true', seed)
-        verify = helper.split("func verifyClipboardDemo() throws", 1)[1].split("func seedEchoType()", 1)[0]
-        self.assertIn("Set(entries.map(\\.text)) == expectedTexts", verify)
-        self.assertIn("entries.filter(\\.isPinned).count == 2", verify)
-        self.assertIn('CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" seed-clipboard', self.capture)
-        self.assertIn('CFFIXED_USER_HOME="$DEMO_HOME" HOME="$DEMO_HOME" swift "$HELPER" verify-clipboard-demo', self.capture)
-        self.assertIn('--env "CFFIXED_USER_HOME=$DEMO_HOME"', self.capture)
-        self.assertIn('open --env "HOME=$DEMO_HOME" --env "CFFIXED_USER_HOME=$DEMO_HOME" "$APP"', self.capture)
-        self.assertIn('"$DEMO_HOME/Library/Preferences/local.clipboardshelf.plist"', self.capture)
+        # cfprefsd ignores HOME/CFFIXED_USER_HOME, so any preference write reaches the real user domain.
+        for forbidden in ("CFPreferencesSetAppValue", "CFPreferencesAppSynchronize", "seed-clipboard", "UserDefaults.standard", "UserDefaults("):
+            self.assertNotIn(forbidden, helper)
+        arguments = helper.split("func printClipboardDemoArguments() throws", 1)[1].split("func seedEchoType()", 1)[0]
+        for printed in ('print("-ClipboardShelfHistoryV1")', 'print("-ClipboardShelfRecordingPausedV1")', 'print("YES")'):
+            self.assertIn(printed, arguments)
+        self.assertIn("clipboardDemoFixture.enumerated()", arguments)
+        self.assertEqual(helper.count(', true),'), 2)  # exactly two pinned synthetic entries
+
+        prepare = self.capture.split("prepare_clipboard_demo() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(prepare.index("clipboard_domain_absent"), prepare.index('CLIPBOARD_REAL_HOME="$real_home"'))
+        self.assertLess(prepare.index('CLIPBOARD_REAL_HOME="$real_home"'), prepare.index("load_clipboard_demo_args"))
+        shelf = self.capture.split("  clipboard-shelf)\n    prepare_clipboard_demo", 1)[1].split("\n    ;;", 1)[0]
+        self.assertTrue(shelf.startswith('\n    open -n "$APP" --args "${CLIPBOARD_DEMO_ARGS[@]}"\n'))
+        self.assertIn('APP_PID="$(swift "$HELPER" pid "$APP")"', shelf)
+        for stale in ("DEMO_HOME", "CFFIXED_USER_HOME", "verify-clipboard-demo"):
+            self.assertNotIn(stale, self.capture)
+        trap_fn = self.capture.split("capture_exit_diagnostics() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(trap_fn.index('kill -KILL "$APP_PID"'), trap_fn.index("clipboard_domain_absent"))
+
+        self.assertIn('dscl . -read "/Users/$(id -un)" NFSHomeDirectory', self.runtime)
+        detector = self.runtime.split("clipboard_domain_absent() {", 1)[1].split("\n}\n", 1)[0]
+        for check in ('/Library/Preferences/$domain.plist', "ByHost/$domain.*.plist", '-L "$plist"', 'defaults read "$domain"'):
+            self.assertIn(check, detector)
+
         macos_ci = MACOS_CI.read_text(encoding="utf-8")
-        prefs_dir = 'mkdir -p "$demo_home/Library/Preferences"'
-        seed_command = 'CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift seed-clipboard'
-        verify_command = 'CFFIXED_USER_HOME="$demo_home" HOME="$demo_home" swift .github/scripts/render-readme-media.swift verify-clipboard-demo'
-        self.assertIn(prefs_dir, macos_ci)
-        self.assertLess(macos_ci.index(prefs_dir), macos_ci.index(seed_command))
-        self.assertLess(macos_ci.index(prefs_dir), macos_ci.index(verify_command))
-        self.assertIn(seed_command, macos_ci)
-        self.assertIn(verify_command, macos_ci)
-        self.assertIn('test -s "$demo_home/Library/Preferences/local.clipboardshelf.plist"', macos_ci)
+        self.assertIn("run: bash .github/scripts/verify-clipboard-demo-isolation.sh", macos_ci)
+        self.assertNotIn("CFFIXED_USER_HOME", macos_ci)
+        verifier = (ROOT / ".github/scripts/verify-clipboard-demo-isolation.sh").read_text(encoding="utf-8")
+        precondition = verifier.index('clipboard_domain_absent "$REAL_HOME" "$DOMAIN" || { printf \'Precondition')
+        with_fixture = verifier.index('run_probe "$WORK/with-fixture.txt" "${CLIPBOARD_DEMO_ARGS[@]}"')
+        control = verifier.index('run_probe "$WORK/without-fixture.txt")')
+        postcondition = verifier.index('clipboard_domain_absent "$REAL_HOME" "$DOMAIN" || { printf \'Postcondition')
+        self.assertLess(precondition, with_fixture)
+        self.assertLess(with_fixture, control)
+        self.assertLess(control, postcondition)
+        self.assertIn('[[ "$actual" != "$expected" ]]', verifier)
+        self.assertIn("[[ \"$control\" != 'paused=false history=absent' ]]", verifier)
+        self.assertIn("<key>CFBundleIdentifier</key><string>local.clipboardshelf</string>", verifier)
+        probe = (ROOT / ".github/scripts/readme-media-defaults-probe.swift").read_text(encoding="utf-8")
+        self.assertNotIn("NSPasteboard", probe)
+        self.assertNotIn(".set(", probe)
+        self.assertIn("[ClipboardEntry].self", probe)
+
         launch = (ROOT / "Sources/main.swift").read_text(encoding="utf-8")
         pasteboard_check = launch.split("@objc private func checkPasteboard()", 1)[1].split("func clipboardShelfViewController", 1)[0]
         self.assertLess(pasteboard_check.index("guard !isRecordingPaused"), pasteboard_check.index("pasteboard.string(forType: .string)"))
+        description = launch.split("private func updateStatusItemAppearance()", 1)[1].split("@objc", 1)[0]
+        self.assertIn('isRecordingPaused ? "Clipboard Shelf — recording paused" : "Clipboard Shelf"', description)
+        self.assertIn("STATUS_DESCRIPTION='Clipboard Shelf — recording paused'", self.capture)
 
     def test_shelf_capture_has_no_desktop_cleanup_and_outputs_stay_under_runner_temp(self) -> None:
         for forbidden in (
@@ -165,12 +202,15 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertIn('capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-light.png"', shelf)
         self.assertIn('capture_menu_region "$ARTIFACT_DIR/clipboard-shelf-dark.png"', shelf)
         self.assertNotIn("$ROOT/docs/images/clipboard-shelf-", shelf)
+        self.assertNotIn("capture_video_region", shelf)
         runtime = (ROOT / ".github/scripts/readme-media-runtime.sh").read_text(encoding="utf-8")
         self.assertIn('local gif="$ARTIFACT_DIR/$SLUG-hero.gif"', runtime)
         self.assertIn('validate_readme_media_capture.py" geometry', self.capture)
         self.assertIn('validate_readme_media_capture.py" png', self.capture)
         success = self.workflow.split("if: success()", 1)[1]
-        self.assertIn('${{ runner.temp }}/readme-media/clipboard-shelf-hero.mp4', success)
+        self.assertIn('${{ runner.temp }}/readme-media/clipboard-shelf-light.png', success)
+        self.assertIn('${{ runner.temp }}/readme-media/clipboard-shelf-dark.png', success)
+        self.assertNotIn("clipboard-shelf-hero", success)
         self.assertNotIn("readme-media/*", success)
         self.assertNotIn("docs/images/", success)
 
@@ -178,11 +218,13 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         for name in (
             "test-readme-media-capture-validation.py",
             "test-readme-media-release.py",
+            "test-readme-media-popover-selection.py",
         ):
             self.assertIn(name, self.workflow)
             self.assertIn(name, MACOS_CI.read_text(encoding="utf-8"))
         macos_ci = MACOS_CI.read_text(encoding="utf-8")
         self.assertNotIn("capture-readme-media.sh", macos_ci)
+        self.assertIn("run: bash .github/scripts/verify-status-popover-geometry.sh", macos_ci)
         self.assertIn("workflow_dispatch", self.workflow)
         self.assertNotIn("  pull_request:", self.workflow)
 
@@ -202,10 +244,18 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertIn("trap capture_exit_diagnostics EXIT", capture)
         self.assertIn("status_item_snapshot", capture)
         status_snapshot_fn = capture.split("status_item_snapshot() {", 1)[1].split("if [[ -L", 1)[0]
-        self.assertIn("every menu bar item of menu bar 1", status_snapshot_fn)
-        self.assertIn("every menu bar item of menu bar 2", status_snapshot_fn)
-        self.assertIn("if matches is 0 then", status_snapshot_fn)
-        self.assertIn("if matches is not 1", status_snapshot_fn)
+        self.assertIn('readme-media-status-item.applescript" frame "$APP_PID" "$STATUS_DESCRIPTION"', status_snapshot_fn)
+        status_script = (ROOT / ".github/scripts/readme-media-status-item.applescript").read_text(encoding="utf-8")
+        self.assertIn("every process whose unix id is appPid", status_script)
+        self.assertIn("repeat with barIndex from 1 to barCount", status_script)
+        self.assertIn("(itemDescription as text) is expectedDescription", status_script)
+        self.assertIn('if (count of statusMatches) is not 1 then error', status_script)
+        self.assertIsNone(re.search(r"\btry\b", status_script))
+        self.assertNotIn("tell process", status_script)
+        self.assertNotIn("contains", status_script)
+        self.assertNotIn("tell process appName", capture.split("show_menu_popover() {", 1)[1].split("window_info() {", 1)[0])
+        snapshot_body = capture.split("write_geometry_snapshot() {", 1)[1]
+        self.assertLess(snapshot_body.index('APP_PID="$(swift "$HELPER" pid "$APP"'), snapshot_body.index("status_item_snapshot"))
         self.assertIn('swift "$HELPER" pid "$APP"', capture)
         self.assertIn('swift "$HELPER" windows-pid "$APP_PID"', capture)
         self.assertIn('swift "$HELPER" display-geometry', capture)
@@ -218,17 +268,26 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         self.assertNotIn("CGWindowListCopyWindowInfo", snapshot_fn)
         helper = (ROOT / ".github/scripts/render-readme-media.swift").read_text(encoding="utf-8")
         pid_windows = helper.split("func printWindowsForPID", 1)[1].split("func printAppPID", 1)[0]
-        self.assertIn("ownerPID == pid", pid_windows)
+        self.assertIn("int32Value == pid", pid_windows)
+        self.assertIn('throw MediaError(description: "Incomplete window record', pid_windows)
+        self.assertNotIn("continue }\n        let layer", pid_windows)
         self.assertNotIn("kCGWindowName", pid_windows)
         self.assertNotIn("kCGWindowOwnerName", pid_windows)
         self.assertIn(r"windowID\tPID\tlayer", pid_windows)
 
     def test_strict_adjacency_limits_are_unchanged_and_not_widened(self) -> None:
-        helper = (ROOT / ".github/scripts/capture-readme-media.sh").read_text(encoding="utf-8")
-        self.assertIn("verticalGap >= -8 and verticalGap <= 120", helper)
-        self.assertIn("candidateLeft < statusRight + 80", helper)
-        self.assertIn("candidateLeft + candidateWidth > statusLeft - 80", helper)
-        self.assertIn("candidateWidth >= 240 and candidateHeight >= 240", helper)
+        validator = (ROOT / ".github/scripts/validate_readme_media_capture.py").read_text(encoding="utf-8")
+        predicate = validator.split("def select_unique_popover(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("horizontal_overlap = x < status_right + 80 and x + width > status_x - 80", predicate)
+        self.assertIn("and -8 <= vertical_gap <= 120", predicate)
+        self.assertIn("and width >= 240", predicate)
+        self.assertIn("and height >= 240", predicate)
+        # Every visible window of the launched PID is judged; none can be skipped by a query error.
+        self.assertIn("select_popover_from_inventory", validator)
+        self.assertIn("menu_geometry() {\n  status_popover_geometry \"$APP_PID\" \"$STATUS_DESCRIPTION\"\n}", self.capture)
+        self.assertIn('windows-pid "$pid"', self.runtime)
+        self.assertIn("select-popover", self.runtime)
+        self.assertNotIn("every window", self.capture)
 
     def test_geometry_snapshot_redacts_titles_and_rejects_unrelated_pids(self) -> None:
         scratch_root = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TMPDIR") or "/tmp")

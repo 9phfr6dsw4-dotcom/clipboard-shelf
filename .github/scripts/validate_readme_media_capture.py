@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 import struct
 import sys
+import zlib
 from typing import Sequence
 
 
@@ -100,25 +101,71 @@ def select_popover_from_inventory(
     return select_unique_popover(status_frame, frames, display_size)
 
 
+MAX_PNG_BYTES = 64 * 1024 * 1024
+PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+
+
 def png_dimensions(path: Path) -> tuple[int, int]:
-    """Read only the PNG signature/IHDR dimensions; never decode image pixels."""
+    """Validate a complete, non-interlaced PNG and return its pixel dimensions.
+
+    Every chunk's length and CRC is checked, IHDR must come first and IEND last with nothing
+    after it, and the concatenated IDAT stream must decompress to exactly one filter byte
+    (0-4) plus the packed row bytes for every scanline. Filters are not reversed, so pixel
+    values are not inspected.
+    """
     try:
         if path.is_symlink() or not path.is_file():
             raise CaptureValidationError("missing_capture")
-        with path.open("rb") as stream:
-            header = stream.read(24)
+        if path.stat().st_size > MAX_PNG_BYTES:
+            raise CaptureValidationError("invalid_png_structure")
+        data = path.read_bytes()
     except OSError:
         raise CaptureValidationError("missing_capture") from None
     if (
-        len(header) != 24
-        or header[:8] != b"\x89PNG\r\n\x1a\n"
-        or struct.unpack(">I", header[8:12])[0] != 13
-        or header[12:16] != b"IHDR"
+        len(data) < 24
+        or data[:8] != b"\x89PNG\r\n\x1a\n"
+        or struct.unpack(">I", data[8:12])[0] != 13
+        or data[12:16] != b"IHDR"
     ):
         raise CaptureValidationError("invalid_png_header")
-    width, height = struct.unpack(">II", header[16:24])
+    width, height = struct.unpack(">II", data[16:24])
     if width <= 0 or height <= 0:
         raise CaptureValidationError("invalid_png_dimensions")
+
+    offset, chunks = 8, []
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise CaptureValidationError("invalid_png_structure")
+        length = struct.unpack(">I", data[offset:offset + 4])[0]
+        kind = data[offset + 4:offset + 8]
+        body_end = offset + 8 + length
+        if body_end + 4 > len(data):
+            raise CaptureValidationError("invalid_png_structure")
+        body = data[offset + 8:body_end]
+        if struct.unpack(">I", data[body_end:body_end + 4])[0] != zlib.crc32(kind + body) & 0xFFFFFFFF:
+            raise CaptureValidationError("invalid_png_structure")
+        chunks.append((kind, body))
+        offset = body_end + 4
+        if kind == b"IEND":
+            break
+    if offset != len(data) or not chunks or chunks[0][0] != b"IHDR" or chunks[-1] != (b"IEND", b""):
+        raise CaptureValidationError("invalid_png_structure")
+
+    bit_depth, color_type, compression, filter_method, interlace = chunks[0][1][8:13]
+    if color_type not in PNG_CHANNELS or compression != 0 or filter_method != 0 or interlace != 0:
+        raise CaptureValidationError("invalid_png_structure")
+    row_bytes = (width * bit_depth * PNG_CHANNELS[color_type] + 7) // 8
+    idat = b"".join(body for kind, body in chunks if kind == b"IDAT")
+    try:
+        decompressor = zlib.decompressobj()
+        rows = decompressor.decompress(idat, height * (row_bytes + 1) + 1)
+        complete = decompressor.eof and not decompressor.unconsumed_tail
+    except zlib.error:
+        raise CaptureValidationError("invalid_png_structure") from None
+    if not complete or len(rows) != height * (row_bytes + 1):
+        raise CaptureValidationError("invalid_png_structure")
+    if any(rows[row * (row_bytes + 1)] > 4 for row in range(height)):
+        raise CaptureValidationError("invalid_png_structure")
     return width, height
 
 
@@ -160,7 +207,7 @@ def main() -> int:
                 expected_width=args.expected[0],
                 expected_height=args.expected[1],
             )
-            print("PNG pixel dimensions match the measured capture bounds")
+            print("PNG is structurally complete and its pixel dimensions match the measured capture bounds")
     except CaptureValidationError as error:
         print(str(error), file=sys.stderr)
         return 1

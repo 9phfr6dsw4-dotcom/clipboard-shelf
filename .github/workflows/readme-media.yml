@@ -44,7 +44,5 @@ jobs:
           path: |
             ${{ runner.temp }}/readme-media/clipboard-shelf-light.png
             ${{ runner.temp }}/readme-media/clipboard-shelf-dark.png
-            ${{ runner.temp }}/readme-media/clipboard-shelf-hero.gif
-            ${{ runner.temp }}/readme-media/clipboard-shelf-hero.mp4
           if-no-files-found: error
           retention-days: 14
