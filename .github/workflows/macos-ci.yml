@@ -43,10 +43,10 @@ jobs:
       - name: Upload finished app
         uses: actions/upload-artifact@v4
         with:
-          name: Clipboard-Shelf-1.1.0
+          name: Clipboard-Shelf-1.1.1
           path: |
-            dist/Clipboard-Shelf-1.1.0.zip
-            dist/Clipboard-Shelf-1.1.0.zip.sha256
+            dist/Clipboard-Shelf-1.1.1.zip
+            dist/Clipboard-Shelf-1.1.1.zip.sha256
           if-no-files-found: error
           retention-days: 30
 
