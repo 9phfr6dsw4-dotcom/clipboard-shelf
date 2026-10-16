@@ -2,23 +2,23 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// The shelf's colours and size: a deep teal panel, mint for what's chosen, gold for pins.
+/// A quiet petrol-teal surface with the proportions of the design reference.
 enum ShelfStyle {
     static let width: CGFloat = 400
     static let height: CGFloat = 600
 
-    static let panelTop = Color(red: 0.067, green: 0.235, blue: 0.282)
-    static let panelBottom = Color(red: 0.035, green: 0.157, blue: 0.196)
+    static let panelTop = Color(red: 0.035, green: 0.190, blue: 0.245)
+    static let panelBottom = Color(red: 0.016, green: 0.110, blue: 0.153)
     static let mint = Color(red: 0.384, green: 0.890, blue: 0.788)
     static let gold = Color(red: 0.965, green: 0.694, blue: 0.204)
     static let paused = Color(red: 0.980, green: 0.620, blue: 0.250)
     /// Dark text and symbols on mint or gold.
     static let ink = Color(red: 0.047, green: 0.133, blue: 0.153)
     static let primaryText = Color.white.opacity(0.95)
-    static let secondaryText = Color.white.opacity(0.64)
+    static let secondaryText = Color.white.opacity(0.66)
     static let tertiaryText = Color.white.opacity(0.48)
-    static let stroke = Color.white.opacity(0.16)
-    static let cardFill = Color.white.opacity(0.045)
+    static let stroke = Color.white.opacity(0.12)
+    static let cardFill = Color.white.opacity(0.028)
 }
 
 enum ShelfFilter {
@@ -60,9 +60,9 @@ struct ShelfView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.bottom, 16)
-            searchField
                 .padding(.bottom, 12)
+            searchField
+                .padding(.bottom, 10)
             controls
                 .padding(.bottom, 14)
             list
@@ -72,25 +72,41 @@ struct ShelfView: View {
         .padding(.top, 18)
         .padding(.bottom, 14)
         .frame(width: ShelfStyle.width, height: ShelfStyle.height, alignment: .top)
-        .background(
-            LinearGradient(colors: [ShelfStyle.panelTop, ShelfStyle.panelBottom], startPoint: .top, endPoint: .bottom)
-        )
+        .background {
+            LinearGradient(
+                colors: [ShelfStyle.panelTop, ShelfStyle.panelBottom],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            RadialGradient(
+                colors: [ShelfStyle.mint.opacity(0.045), .clear],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 360
+            )
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.5)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
-        HStack(spacing: 13) {
+        HStack(spacing: 12) {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: 54, height: 54)
+                .frame(width: 48, height: 48)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Clipboard Shelf")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 18.5, weight: .semibold))
                     .foregroundStyle(ShelfStyle.primaryText)
                 Text("Saved only on this Mac")
-                    .font(.system(size: 13.5))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(ShelfStyle.secondaryText)
             }
             Spacer(minLength: 8)
@@ -102,11 +118,11 @@ struct ShelfView: View {
     private var searchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(ShelfStyle.secondaryText)
             TextField("Search copied text", text: $model.query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15))
+                .font(.system(size: 14))
                 .foregroundStyle(ShelfStyle.primaryText)
                 .focusEffectDisabled()
                 .accessibilityLabel("Search clipboard history")
@@ -121,22 +137,22 @@ struct ShelfView: View {
                 .help("Clear search")
             }
         }
-        .padding(.horizontal, 13)
-        .frame(height: 40)
-        .background(RoundedRectangle(cornerRadius: 11).fill(Color.white.opacity(0.04)))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(ShelfStyle.stroke, lineWidth: 1))
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.025)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ShelfStyle.stroke, lineWidth: 0.75))
     }
 
     private var controls: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             FilterPicker(selection: $model.filter)
             Spacer(minLength: 8)
             Circle()
                 .fill(model.recordingPaused ? ShelfStyle.paused : ShelfStyle.mint)
-                .frame(width: 8, height: 8)
+                .frame(width: 7, height: 7)
                 .accessibilityHidden(true)
             Text(model.recordingPaused ? "Paused" : "Saving new copies")
-                .font(.system(size: 13))
+                .font(.system(size: 12))
                 .foregroundStyle(ShelfStyle.secondaryText)
                 .lineLimit(1)
             CircleButton(
@@ -162,7 +178,7 @@ struct ShelfView: View {
             ScrollView {
                 // Redraws now and then so "Copied 8 minutes ago" stays true while the shelf is open.
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    LazyVStack(alignment: .leading, spacing: 8) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
                         if !pinned.isEmpty {
                             SectionTitle(title: "PINNED", count: pinned.count)
                             ForEach(pinned) { entry in
@@ -171,7 +187,7 @@ struct ShelfView: View {
                         }
                         if !recent.isEmpty {
                             SectionTitle(title: "RECENT", count: recent.count)
-                                .padding(.top, pinned.isEmpty ? 0 : 10)
+                                .padding(.top, pinned.isEmpty ? 0 : 8)
                             ForEach(recent) { entry in
                                 row(entry, now: context.date)
                             }
@@ -196,17 +212,17 @@ struct ShelfView: View {
 
     private var footer: some View {
         let recentCount = model.history.recentEntries.count
-        return VStack(spacing: 11) {
+        return VStack(spacing: 9) {
             Rectangle()
                 .fill(ShelfStyle.stroke)
-                .frame(height: 1)
+                .frame(height: 0.5)
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(ClipboardSummaryText.counts(recent: recentCount, pinned: model.history.pinnedEntries.count))
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 12))
                         .foregroundStyle(ShelfStyle.secondaryText)
                     Text("Click an item to copy it")
-                        .font(.system(size: 12.5))
+                        .font(.system(size: 11.5))
                         .foregroundStyle(ShelfStyle.tertiaryText)
                 }
                 Spacer()
@@ -214,7 +230,7 @@ struct ShelfView: View {
                     model.onClearRecent()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(recentCount > 0 ? ShelfStyle.mint : ShelfStyle.tertiaryText)
                 .disabled(recentCount == 0)
                 .help("Remove unpinned clipboard items")
@@ -232,24 +248,27 @@ struct EntryRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(entry.text.replacingOccurrences(of: "\n", with: "  "))
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 13.5, weight: .regular))
                     .foregroundStyle(ShelfStyle.primaryText)
                     .lineLimit(2)
                     .truncationMode(.tail)
                 Text(entry.isPinned
                      ? ClipboardTimeText.pinned(entry.createdAt, now: now)
                      : ClipboardTimeText.copied(entry.createdAt, now: now))
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 11.5))
                     .foregroundStyle(ShelfStyle.secondaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if hovering {
-                SquareButton(systemImage: "doc.on.doc", kind: .outline, help: "Copy", action: copy)
-                    .accessibilityLabel("Copy clipboard item")
-            }
+            // Keep its space when hidden, so hovering cannot rewrap the snippet or move a pin.
+            SquareButton(systemImage: "doc.on.doc", kind: .outline, help: "Copy", action: copy)
+                .opacity(hovering ? 1 : 0)
+                .disabled(!hovering)
+                .allowsHitTesting(hovering)
+                .accessibilityHidden(!hovering)
+                .accessibilityLabel("Copy clipboard item")
             SquareButton(
                 systemImage: entry.isPinned ? "pin.fill" : "pin",
                 kind: entry.isPinned ? .gold : .outline,
@@ -258,18 +277,19 @@ struct EntryRow: View {
             )
             .accessibilityLabel(entry.isPinned ? "Unpin clipboard item" : "Pin clipboard item")
         }
-        .padding(.leading, 14)
+        .padding(.leading, 13)
         .padding(.trailing, 10)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
+        .frame(minHeight: 48)
         .background(
-            RoundedRectangle(cornerRadius: 11)
+            RoundedRectangle(cornerRadius: 10)
                 .fill(hovering ? ShelfStyle.mint.opacity(0.10) : ShelfStyle.cardFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 11)
-                .stroke(hovering ? ShelfStyle.mint.opacity(0.75) : ShelfStyle.stroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(hovering ? ShelfStyle.mint.opacity(0.55) : ShelfStyle.stroke, lineWidth: 0.75)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 11))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
         .onHover { hovering = $0 }
         .onTapGesture(perform: copy)
         .accessibilityElement(children: .contain)
@@ -284,12 +304,12 @@ struct SectionTitle: View {
     let count: Int
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Text(title)
-                .tracking(1.6)
+                .tracking(1.3)
             Text("\(count)")
         }
-        .font(.system(size: 12.5, weight: .semibold))
+        .font(.system(size: 11.5, weight: .medium))
         .foregroundStyle(ShelfStyle.secondaryText)
         .padding(.leading, 4)
         .padding(.bottom, 2)
@@ -307,7 +327,7 @@ struct FilterPicker: View {
             segment("Pinned", .pinned)
         }
         .padding(2)
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(ShelfStyle.stroke, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ShelfStyle.stroke, lineWidth: 0.75))
     }
 
     private func segment(_ title: String, _ value: ShelfFilter) -> some View {
@@ -316,10 +336,10 @@ struct FilterPicker: View {
             selection = value
         } label: {
             Text(title)
-                .font(.system(size: 14, weight: selected ? .semibold : .regular))
+                .font(.system(size: 12.5, weight: selected ? .medium : .regular))
                 .foregroundStyle(selected ? ShelfStyle.ink : ShelfStyle.primaryText)
-                .frame(width: 68, height: 30)
-                .background(RoundedRectangle(cornerRadius: 9).fill(selected ? ShelfStyle.mint : Color.clear))
+                .frame(width: 60, height: 26)
+                .background(RoundedRectangle(cornerRadius: 8).fill(selected ? ShelfStyle.mint : Color.clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -336,11 +356,11 @@ struct CircleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(ShelfStyle.primaryText)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(Color.white.opacity(0.06)))
-                .overlay(Circle().stroke(ShelfStyle.stroke, lineWidth: 1))
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Color.white.opacity(0.035)))
+                .overlay(Circle().strokeBorder(ShelfStyle.stroke, lineWidth: 0.75))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -363,18 +383,18 @@ struct SquareButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(kind == .gold ? ShelfStyle.ink : ShelfStyle.primaryText)
-                .frame(width: 32, height: 32)
+                .frame(width: 28, height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(kind == .gold ? ShelfStyle.gold : Color.white.opacity(0.04))
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(kind == .gold ? ShelfStyle.gold : Color.white.opacity(0.025))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(kind == .gold ? Color.clear : Color.white.opacity(0.28), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(kind == .gold ? Color.clear : Color.white.opacity(0.18), lineWidth: 0.75)
                 )
-                .contentShape(RoundedRectangle(cornerRadius: 8))
+                .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .help(help)
