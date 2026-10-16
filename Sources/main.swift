@@ -7,298 +7,19 @@ protocol ClipboardShelfViewControllerDelegate: AnyObject {
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, togglePin entry: ClipboardEntry)
     func clipboardShelfViewControllerClearRecent(_ controller: ClipboardShelfViewController)
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecordingPaused paused: Bool)
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecentLimit limit: Int)
     func clipboardShelfViewControllerQuit(_ controller: ClipboardShelfViewController)
-}
-
-@MainActor
-final class ClipboardEntryCellView: NSTableCellView {
-    static let identifier = NSUserInterfaceItemIdentifier("ClipboardEntryCellView")
-
-    private let primaryLabel = NSTextField(labelWithString: "")
-    private let secondaryLabel = NSTextField(labelWithString: "")
-    let pinButton = NSButton()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 9
-
-        primaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        primaryLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        primaryLabel.lineBreakMode = .byTruncatingTail
-        primaryLabel.maximumNumberOfLines = 2
-        primaryLabel.cell?.wraps = true
-        primaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        secondaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        secondaryLabel.font = .systemFont(ofSize: 10.5)
-        secondaryLabel.textColor = .secondaryLabelColor
-        secondaryLabel.lineBreakMode = .byTruncatingTail
-
-        pinButton.translatesAutoresizingMaskIntoConstraints = false
-        pinButton.isBordered = false
-        pinButton.bezelStyle = .inline
-        pinButton.imagePosition = .imageOnly
-        pinButton.toolTip = "Pin or unpin this clipboard item"
-        pinButton.setAccessibilityLabel("Pin clipboard item")
-
-        addSubview(primaryLabel)
-        addSubview(secondaryLabel)
-        addSubview(pinButton)
-
-        NSLayoutConstraint.activate([
-            primaryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            primaryLabel.trailingAnchor.constraint(equalTo: pinButton.leadingAnchor, constant: -8),
-            primaryLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-
-            secondaryLabel.leadingAnchor.constraint(equalTo: primaryLabel.leadingAnchor),
-            secondaryLabel.trailingAnchor.constraint(equalTo: primaryLabel.trailingAnchor),
-            secondaryLabel.topAnchor.constraint(equalTo: primaryLabel.bottomAnchor, constant: 4),
-            secondaryLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
-
-            pinButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            pinButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            pinButton.widthAnchor.constraint(equalToConstant: 25),
-            pinButton.heightAnchor.constraint(equalToConstant: 25)
-        ])
-    }
-
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    func configure(with entry: ClipboardEntry, row: Int, target: AnyObject, pinAction: Selector) {
-        primaryLabel.stringValue = entry.text.replacingOccurrences(of: "\n", with: "  ")
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = Calendar.current.isDateInToday(entry.createdAt) ? .none : .short
-        let time = formatter.string(from: entry.createdAt)
-        secondaryLabel.stringValue = entry.isPinned ? "Pinned • \(time)" : "Copied \(time)"
-
-        pinButton.tag = row
-        pinButton.target = target
-        pinButton.action = pinAction
-        pinButton.image = NSImage(
-            systemSymbolName: entry.isPinned ? "pin.fill" : "pin",
-            accessibilityDescription: entry.isPinned ? "Unpin" : "Pin"
-        )
-        pinButton.contentTintColor = entry.isPinned ? .systemOrange : .secondaryLabelColor
-        pinButton.setAccessibilityLabel(entry.isPinned ? "Unpin clipboard item" : "Pin clipboard item")
-    }
-}
-
-@MainActor
-final class ClipboardShelfViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
-    weak var delegate: ClipboardShelfViewControllerDelegate?
-
-    private let searchField = NSSearchField()
-    private let tableView = NSTableView()
-    private let countLabel = NSTextField(labelWithString: "")
-    private let emptyLabel = NSTextField(labelWithString: "Copy some text to begin")
-    private let pauseButton = NSButton(checkboxWithTitle: "Pause recording", target: nil, action: nil)
-    private let clearButton = NSButton(title: "Clear Recent", target: nil, action: nil)
-    private let quitButton = NSButton(title: "Quit", target: nil, action: nil)
-    private var history = ClipboardHistory()
-    private var displayedEntries: [ClipboardEntry] = []
-    private var isRecordingPaused = false
-
-    override func loadView() {
-        let background = NSVisualEffectView()
-        background.material = .popover
-        background.blendingMode = .behindWindow
-        background.state = .active
-        view = background
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        preferredContentSize = NSSize(width: 430, height: 500)
-
-        let titleLabel = NSTextField(labelWithString: "Clipboard Shelf")
-        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let privacyLabel = NSTextField(labelWithString: "Saved only on this Mac")
-        privacyLabel.font = .systemFont(ofSize: 10.5)
-        privacyLabel.textColor = .secondaryLabelColor
-        privacyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        searchField.placeholderString = "Search copied text"
-        searchField.sendsSearchStringImmediately = true
-        searchField.delegate = self
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-        searchField.setAccessibilityLabel("Search clipboard history")
-
-        pauseButton.controlSize = .small
-        pauseButton.target = self
-        pauseButton.action = #selector(pauseRecordingClicked)
-        pauseButton.setAccessibilityLabel("Pause clipboard recording")
-        pauseButton.translatesAutoresizingMaskIntoConstraints = false
-
-        clearButton.bezelStyle = .inline
-        clearButton.controlSize = .small
-        clearButton.target = self
-        clearButton.action = #selector(clearRecentClicked)
-        clearButton.translatesAutoresizingMaskIntoConstraints = false
-        clearButton.toolTip = "Remove unpinned clipboard items"
-
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("ClipboardItems"))
-        tableView.addTableColumn(column)
-        tableView.headerView = nil
-        tableView.rowHeight = 66
-        tableView.intercellSpacing = NSSize(width: 0, height: 5)
-        tableView.backgroundColor = .clear
-        tableView.selectionHighlightStyle = .regular
-        tableView.dataSource = self
-        tableView.delegate = self
-        tableView.target = self
-        tableView.action = #selector(tableRowClicked)
-        tableView.doubleAction = #selector(tableRowClicked)
-        tableView.setAccessibilityLabel("Clipboard history")
-
-        let scrollView = NSScrollView()
-        scrollView.documentView = tableView
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-
-        emptyLabel.font = .systemFont(ofSize: 13)
-        emptyLabel.textColor = .tertiaryLabelColor
-        emptyLabel.alignment = .center
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        countLabel.font = .systemFont(ofSize: 10.5)
-        countLabel.textColor = .secondaryLabelColor
-        countLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        quitButton.bezelStyle = .inline
-        quitButton.controlSize = .small
-        quitButton.target = self
-        quitButton.action = #selector(quitClicked)
-        quitButton.translatesAutoresizingMaskIntoConstraints = false
-
-        for subview in [titleLabel, privacyLabel, pauseButton, searchField, clearButton, scrollView, emptyLabel, countLabel, quitButton] {
-            view.addSubview(subview)
-        }
-
-        NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 15),
-
-            privacyLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            privacyLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
-
-            clearButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            clearButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-
-            pauseButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            pauseButton.topAnchor.constraint(equalTo: privacyLabel.bottomAnchor, constant: 8),
-
-            searchField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
-            searchField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            searchField.topAnchor.constraint(equalTo: pauseButton.bottomAnchor, constant: 8),
-
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
-            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
-            scrollView.bottomAnchor.constraint(equalTo: countLabel.topAnchor, constant: -9),
-
-            emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
-
-            countLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            countLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -13),
-
-            quitButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            quitButton.centerYAnchor.constraint(equalTo: countLabel.centerYAnchor)
-        ])
-
-        refreshDisplayedEntries()
-    }
-
-    func update(history: ClipboardHistory, recordingPaused: Bool) {
-        self.history = history
-        updateRecordingPaused(recordingPaused)
-        refreshDisplayedEntries()
-    }
-
-    func updateRecordingPaused(_ paused: Bool) {
-        isRecordingPaused = paused
-        pauseButton.state = paused ? .on : .off
-        pauseButton.title = paused ? "Recording paused — click to resume" : "Pause recording"
-        pauseButton.contentTintColor = paused ? .systemOrange : .controlAccentColor
-        pauseButton.setAccessibilityLabel(paused ? "Recording paused; click to resume" : "Pause clipboard recording")
-    }
-
-    func focusSearch() {
-        view.window?.makeFirstResponder(searchField)
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        displayedEntries.count
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let cell = (tableView.makeView(withIdentifier: ClipboardEntryCellView.identifier, owner: self) as? ClipboardEntryCellView)
-            ?? ClipboardEntryCellView(frame: .zero)
-        cell.identifier = ClipboardEntryCellView.identifier
-        cell.configure(with: displayedEntries[row], row: row, target: self, pinAction: #selector(pinClicked(_:)))
-        return cell
-    }
-
-    func controlTextDidChange(_ notification: Notification) {
-        refreshDisplayedEntries()
-    }
-
-    @objc private func tableRowClicked() {
-        let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
-        guard displayedEntries.indices.contains(row) else { return }
-        delegate?.clipboardShelfViewController(self, copy: displayedEntries[row])
-    }
-
-    @objc private func pinClicked(_ sender: NSButton) {
-        guard displayedEntries.indices.contains(sender.tag) else { return }
-        delegate?.clipboardShelfViewController(self, togglePin: displayedEntries[sender.tag])
-    }
-
-    @objc private func pauseRecordingClicked() {
-        delegate?.clipboardShelfViewController(self, setRecordingPaused: pauseButton.state == .on)
-    }
-
-    @objc private func clearRecentClicked() {
-        delegate?.clipboardShelfViewControllerClearRecent(self)
-    }
-
-    @objc private func quitClicked() {
-        delegate?.clipboardShelfViewControllerQuit(self)
-    }
-
-    private func refreshDisplayedEntries() {
-        guard isViewLoaded else { return }
-        displayedEntries = history.filteredEntries(matching: searchField.stringValue)
-        tableView.reloadData()
-        emptyLabel.stringValue = searchField.stringValue.isEmpty ? "Copy some text to begin" : "No matching clipboard items"
-        emptyLabel.isHidden = !displayedEntries.isEmpty
-
-        let pinnedCount = history.entries.filter(\.isPinned).count
-        let recentCount = history.entries.count - pinnedCount
-        var parts = ["\(recentCount) recent"]
-        if pinnedCount > 0 { parts.append("\(pinnedCount) pinned") }
-        countLabel.stringValue = parts.joined(separator: " • ")
-        clearButton.isEnabled = recentCount > 0
-    }
 }
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewControllerDelegate {
     private let defaultsKey = "ClipboardShelfHistoryV1"
     private let pausedKey = "ClipboardShelfRecordingPausedV1"
+    private let recentLimitKey = "ClipboardShelfRecentLimitV1"
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var shelfController: ClipboardShelfViewController!
-    private var history = ClipboardHistory(maxRecentItems: 20)
+    private var history = ClipboardHistory(maxRecentItems: ClipboardHistory.defaultRecentLimit)
     private var monitorTimer: Timer?
     private var pasteboardChangeCount = 0
     private var isRecordingPaused = false
@@ -309,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        history = ClipboardHistory(maxRecentItems: storedRecentLimit)
         loadHistory()
         isRecordingPaused = UserDefaults.standard.bool(forKey: pausedKey)
 
@@ -318,7 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         shelfController.update(history: history, recordingPaused: isRecordingPaused)
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 430, height: 500)
+        popover.appearance = NSAppearance(named: .darkAqua)
+        popover.contentSize = NSSize(width: ShelfStyle.width, height: ShelfStyle.height)
         popover.contentViewController = shelfController
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -412,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Clear Recent")
         alert.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         history.clearRecent()
@@ -427,13 +150,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         shelfController.updateRecordingPaused(paused)
     }
 
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecentLimit limit: Int) {
+        let limit = ClipboardHistory.validRecentLimit(limit)
+        UserDefaults.standard.set(limit, forKey: recentLimitKey)
+        history.setMaxRecentItems(limit)
+        saveHistory()
+        shelfController.update(history: history, recordingPaused: isRecordingPaused)
+    }
+
     func clipboardShelfViewControllerQuit(_ controller: ClipboardShelfViewController) {
         NSApp.terminate(nil)
     }
 
+    /// How many recent items to keep: 20, 50 or 100 (chosen in the ⋯ menu).
+    private var storedRecentLimit: Int {
+        ClipboardHistory.validRecentLimit(UserDefaults.standard.integer(forKey: recentLimitKey))
+    }
+
     private func loadHistory() {
         guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let restored = try? ClipboardHistory.decode(data: data, maxRecentItems: 20) else {
+              let restored = try? ClipboardHistory.decode(data: data, maxRecentItems: storedRecentLimit) else {
             return
         }
         history = restored
@@ -460,6 +196,11 @@ private func runSelfTest() -> Int32 {
     }
     guard Bundle.main.url(forResource: "AppIcon", withExtension: "icns") != nil else {
         fputs("Self-test failed: app icon resource\n", stderr)
+        return 1
+    }
+    guard Bundle.main.url(forResource: "Assets", withExtension: "car") != nil,
+          Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") as? String == "AppIcon" else {
+        fputs("Self-test failed: macOS 26 app icon (Assets.car)\n", stderr)
         return 1
     }
     guard ClipboardPrivacy.shouldSkip(
