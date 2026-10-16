@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-and-test:
     name: Test and build Universal app
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -43,10 +43,10 @@ jobs:
       - name: Upload finished app
         uses: actions/upload-artifact@v4
         with:
-          name: Clipboard-Shelf-1.0.2
+          name: Clipboard-Shelf-1.1.0
           path: |
-            dist/Clipboard-Shelf-1.0.2.zip
-            dist/Clipboard-Shelf-1.0.2.zip.sha256
+            dist/Clipboard-Shelf-1.1.0.zip
+            dist/Clipboard-Shelf-1.1.0.zip.sha256
           if-no-files-found: error
           retention-days: 30
 

@@ -38,8 +38,17 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
 }
 
 struct ClipboardHistory: Equatable {
+    /// How many recent (unpinned) items the shelf can keep; pinned items never count.
+    static let recentLimitOptions = [20, 50, 100]
+    static let defaultRecentLimit = 20
+
+    /// A stored limit if it's one of the offered choices, otherwise the default.
+    static func validRecentLimit(_ stored: Int) -> Int {
+        recentLimitOptions.contains(stored) ? stored : defaultRecentLimit
+    }
+
     private(set) var entries: [ClipboardEntry]
-    private let maxRecentItems: Int
+    private(set) var maxRecentItems: Int
 
     init(entries: [ClipboardEntry] = [], maxRecentItems: Int = 20) {
         self.maxRecentItems = max(1, maxRecentItems)
@@ -59,6 +68,15 @@ struct ClipboardHistory: Equatable {
         }
         normalize()
     }
+
+    /// Changes how many recent items are kept. A smaller limit removes the oldest recent items.
+    mutating func setMaxRecentItems(_ limit: Int) {
+        maxRecentItems = max(1, limit)
+        normalize()
+    }
+
+    var pinnedEntries: [ClipboardEntry] { entries.filter(\.isPinned) }
+    var recentEntries: [ClipboardEntry] { entries.filter { !$0.isPinned } }
 
     mutating func togglePin(id: UUID) {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
@@ -108,5 +126,48 @@ struct ClipboardHistory: Equatable {
         let pinned = entries.filter(\.isPinned)
         let recent = entries.filter { !$0.isPinned }.prefix(maxRecentItems)
         entries = pinned + recent
+    }
+}
+
+/// The short times under each item: "Copied 8 minutes ago", "Pinned · Yesterday".
+enum ClipboardTimeText {
+    static func copied(_ date: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let seconds = now.timeIntervalSince(date)
+        if seconds < 60 { return "Copied just now" }
+        let minutes = Int(seconds / 60)
+        if minutes < 60 { return minutes == 1 ? "Copied 1 minute ago" : "Copied \(minutes) minutes ago" }
+        if calendar.isDate(date, inSameDayAs: now) {
+            let hours = minutes / 60
+            return hours == 1 ? "Copied 1 hour ago" : "Copied \(hours) hours ago"
+        }
+        if isYesterday(date, now: now, calendar: calendar) { return "Copied yesterday" }
+        return "Copied \(shortDate(date, calendar: calendar, locale: locale))"
+    }
+
+    static func pinned(_ date: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        if calendar.isDate(date, inSameDayAs: now) || date > now { return "Pinned · Today" }
+        if isYesterday(date, now: now, calendar: calendar) { return "Pinned · Yesterday" }
+        return "Pinned · \(shortDate(date, calendar: calendar, locale: locale))"
+    }
+
+    private static func isYesterday(_ date: Date, now: Date, calendar: Calendar) -> Bool {
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: now) else { return false }
+        return calendar.isDate(date, inSameDayAs: yesterday)
+    }
+
+    private static func shortDate(_ date: Date, calendar: Calendar, locale: Locale) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = locale
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        return formatter.string(from: date)
+    }
+}
+
+/// The counts in the shelf's footer, like "4 recent · 2 pinned".
+enum ClipboardSummaryText {
+    static func counts(recent: Int, pinned: Int) -> String {
+        pinned > 0 ? "\(recent) recent · \(pinned) pinned" : "\(recent) recent"
     }
 }

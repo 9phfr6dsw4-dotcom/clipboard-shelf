@@ -99,6 +99,54 @@ private func testClearRecentKeepsPinsAndArchiveRoundTrips() throws {
     expect(restored.entries == history.entries, "encoded clipboard history should restore exactly")
 }
 
+private func testRecentLimitCanBeChangedAndOnlyOfferedChoicesAreKept() {
+    var history = ClipboardHistory(maxRecentItems: 100)
+    for index in 1...60 {
+        history.record("Item \(index)", at: Date(timeIntervalSince1970: TimeInterval(index)))
+    }
+    let pinnedID = history.entries.last!.id
+    history.togglePin(id: pinnedID)
+    expect(history.recentEntries.count == 59, "a 100-item shelf keeps all 59 recent items")
+
+    history.setMaxRecentItems(20)
+    expect(history.maxRecentItems == 20, "the limit can be lowered")
+    expect(history.recentEntries.count == 20, "lowering the limit keeps only the newest 20 recent items")
+    expect(history.recentEntries.first?.text == "Item 60", "the newest recent item stays at the top")
+    expect(history.pinnedEntries.map(\.id) == [pinnedID], "pinned items are never removed by the limit")
+
+    expect(ClipboardHistory.recentLimitOptions == [20, 50, 100], "the shelf offers 20, 50 and 100")
+    expect(ClipboardHistory.validRecentLimit(50) == 50, "an offered stored limit is used")
+    expect(ClipboardHistory.validRecentLimit(0) == 20, "a missing stored limit falls back to 20")
+    expect(ClipboardHistory.validRecentLimit(7) == 20, "an unknown stored limit falls back to 20")
+}
+
+private func testTimeAndSummaryText() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    let locale = Locale(identifier: "en_US")
+    let now = Date(timeIntervalSince1970: 1_780_000_000) // a fixed afternoon (UTC)
+    func copied(_ secondsAgo: TimeInterval) -> String {
+        ClipboardTimeText.copied(now.addingTimeInterval(-secondsAgo), now: now, calendar: calendar, locale: locale)
+    }
+    expect(copied(5) == "Copied just now", "under a minute reads just now")
+    expect(copied(-30) == "Copied just now", "a clock that's slightly ahead reads just now")
+    expect(copied(60) == "Copied 1 minute ago", "one minute is singular")
+    expect(copied(8 * 60) == "Copied 8 minutes ago", "minutes are counted")
+    expect(copied(2 * 3600) == "Copied 2 hours ago", "earlier today counts hours")
+    expect(copied(26 * 3600) == "Copied yesterday", "the day before reads yesterday")
+    expect(copied(5 * 86400).hasPrefix("Copied ") && !copied(5 * 86400).contains("ago"), "older items show their date")
+
+    func pinned(_ secondsAgo: TimeInterval) -> String {
+        ClipboardTimeText.pinned(now.addingTimeInterval(-secondsAgo), now: now, calendar: calendar, locale: locale)
+    }
+    expect(pinned(600) == "Pinned · Today", "pinned today")
+    expect(pinned(26 * 3600) == "Pinned · Yesterday", "pinned yesterday")
+    expect(pinned(5 * 86400).hasPrefix("Pinned · ") && pinned(5 * 86400) != "Pinned · Today", "older pins show their date")
+
+    expect(ClipboardSummaryText.counts(recent: 4, pinned: 2) == "4 recent · 2 pinned", "footer counts both")
+    expect(ClipboardSummaryText.counts(recent: 4, pinned: 0) == "4 recent", "footer leaves out zero pins")
+}
+
 @main
 struct CoreTestRunner {
     static func main() {
@@ -106,6 +154,8 @@ struct CoreTestRunner {
         testRecentLimitDoesNotEvictPinnedItems()
         testSearchIsCaseInsensitiveAndPinFirst()
         testSensitiveClipboardSourcesAreSkipped()
+        testRecentLimitCanBeChangedAndOnlyOfferedChoicesAreKept()
+        testTimeAndSummaryText()
         do {
             try testClearRecentKeepsPinsAndArchiveRoundTrips()
         } catch {
