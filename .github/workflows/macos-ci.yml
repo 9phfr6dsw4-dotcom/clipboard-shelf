@@ -15,7 +15,7 @@ jobs:
     name: Test and build Universal app
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify password app bundle identifiers on macOS
         run: |
@@ -41,7 +41,7 @@ jobs:
         run: bash Scripts/build.sh
 
       - name: Upload finished app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Clipboard-Shelf-1.1.1
           path: |
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
