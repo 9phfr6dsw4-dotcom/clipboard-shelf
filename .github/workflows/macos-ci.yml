@@ -14,8 +14,11 @@ jobs:
   build-and-test:
     name: Test and build Universal app
     runs-on: macos-26
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Verify password app bundle identifiers on macOS
         run: |
@@ -37,16 +40,39 @@ jobs:
       - name: Run Swift core tests
         run: bash Scripts/test.sh
 
+      # Only a push to main is a release candidate, so only it gets the release certificate.
+      # Pull request builds are ad-hoc signed and never see a secret.
+      - name: Set up the signing identity
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SELF_SIGN_P12_BASE64: ${{ secrets.SELF_SIGN_P12_BASE64 }}
+          SELF_SIGN_P12_PASSWORD: ${{ secrets.SELF_SIGN_P12_PASSWORD }}
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_API_KEY_P8_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: bash Scripts/ci-signing.sh
+
       - name: Build and verify app bundle
         run: bash Scripts/build.sh
 
+      - name: Update an older build to a newer one through Sparkle
+        run: bash Scripts/update-test.sh
+
+      - name: Remove the signing identity
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: bash Scripts/ci-signing.sh cleanup
+
       - name: Upload finished app
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v7
         with:
-          name: Clipboard-Shelf-1.1.1
+          name: Clipboard-Shelf-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            dist/Clipboard-Shelf-1.1.1.zip
-            dist/Clipboard-Shelf-1.1.1.zip.sha256
+            dist/Clipboard-Shelf-*.zip
+            dist/Clipboard-Shelf-*.zip.sha256
+            dist/signing.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -69,3 +95,14 @@ jobs:
           python3 .github/scripts/test-readme-media-capture-validation.py
           python3 .github/scripts/test-readme-media-release.py
           python3 .github/scripts/test-readme-media-popover-selection.py
+
+  release-tools:
+    name: Test release tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run release tool tests
+        run: python3 -I Scripts/release/test_sparkle_release.py

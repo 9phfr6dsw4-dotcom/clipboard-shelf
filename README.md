@@ -37,13 +37,13 @@
 <details>
 <summary>First launch on macOS</summary>
 
-The release is ad-hoc signed and not notarized. If macOS blocks it, go to **System Settings → Privacy & Security → Open Anyway**, confirm, then reopen Clipboard Shelf from Applications. No additional macOS privacy permission is required.
+The release is signed with a self-made certificate and is not notarized. If macOS blocks it, go to **System Settings → Privacy & Security → Open Anyway**, confirm, then reopen Clipboard Shelf from Applications. No additional macOS privacy permission is required.
 
 </details>
 
 ## Privacy
 
-Clipboard history and preferences are stored locally in macOS `UserDefaults`. Clipboard Shelf has no networking or analytics code. Press the pause button whenever you do not want new copies saved.
+Clipboard history and preferences are stored locally in macOS `UserDefaults`. Clipboard Shelf sends nothing about your clipboard and has no analytics. It goes online only to check GitHub for updates, once an hour and when you choose **Check for Updates…**, and it installs an update only when the shelf is closed. Press the pause button whenever you do not want new copies saved.
 
 <details>
 <summary>Build and test</summary>

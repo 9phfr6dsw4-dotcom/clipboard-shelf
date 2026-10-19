@@ -147,6 +147,38 @@ private func testTimeAndSummaryText() {
     expect(ClipboardSummaryText.counts(recent: 4, pinned: 0) == "4 recent", "footer leaves out zero pins")
 }
 
+private func testUpdateInstallPolicyWaitsOnlyWhileTheShelfIsOpen() {
+    expect(UpdateInstallPolicy.canInstallNow(isBusy: false), "an update installs right away when the shelf is closed")
+    expect(!UpdateInstallPolicy.canInstallNow(isBusy: true), "an update waits while the shelf is open")
+    expect(UpdateInstallPolicy.retryInterval == 15, "the waiting installer checks every 15 seconds")
+}
+
+private func testUpdateSettingsAreInInfoPlist() {
+    let plistURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Resources/Info.plist")
+    guard let data = try? Data(contentsOf: plistURL),
+          let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+        expect(false, "Resources/Info.plist should be a readable property list")
+        return
+    }
+
+    expect(info["CFBundleIdentifier"] as? String == "local.clipboardshelf", "the bundle identifier must not change")
+    expect(
+        info["SUFeedURL"] as? String == "https://github.com/9phfr6dsw4-dotcom/clipboard-shelf/releases/latest/download/appcast.xml",
+        "updates should come from the latest GitHub release feed"
+    )
+    expect(info["SUEnableAutomaticChecks"] as? Bool == true, "automatic checks should be on")
+    expect(info["SUAutomaticallyUpdate"] as? Bool == true, "automatic installs should be on")
+    expect(info["SUScheduledCheckInterval"] as? Int == 3600, "the feed should be checked hourly")
+    expect(info["SURequireSignedFeed"] as? Bool == true, "the feed must be signed")
+    expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true, "updates must be verified before they are unpacked")
+    expect(info["SUAllowsAutomaticUpdates"] == nil, "SUAllowsAutomaticUpdates must not be set")
+    let publicKey = info["SUPublicEDKey"] as? String ?? ""
+    expect(Data(base64Encoded: publicKey)?.count == 32, "SUPublicEDKey should be a base64 Ed25519 public key")
+    expect(Int(info["CFBundleVersion"] as? String ?? "") != nil, "Sparkle compares whole-number builds")
+}
+
 @main
 struct CoreTestRunner {
     static func main() {
@@ -156,6 +188,8 @@ struct CoreTestRunner {
         testSensitiveClipboardSourcesAreSkipped()
         testRecentLimitCanBeChangedAndOnlyOfferedChoicesAreKept()
         testTimeAndSummaryText()
+        testUpdateInstallPolicyWaitsOnlyWhileTheShelfIsOpen()
+        testUpdateSettingsAreInInfoPlist()
         do {
             try testClearRecentKeepsPinsAndArchiveRoundTrips()
         } catch {
