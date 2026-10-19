@@ -56,4 +56,4 @@ codesign "${args[@]}" "$APP"
 
 codesign --verify --deep --strict --verbose=2 "$APP"
 printf 'Signed %s (%s)\n' "$APP" "$MODE"
-codesign --display --requirements - "$APP" 2>/dev/null | sed -n 's/^designated => /Designated requirement: /p'
+codesign --display --requirements - "$APP" 2>&1 | sed -n 's/^designated => /Designated requirement: /p'

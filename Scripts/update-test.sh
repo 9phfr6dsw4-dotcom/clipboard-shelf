@@ -80,9 +80,9 @@ make_copy() {
 
 make_copy "$OLD_APP" "$OLD_BUILD" "$BASE_VERSION"
 make_copy "$NEW_APP" "$NEW_BUILD" "$NEW_VERSION"
-OLD_REQUIREMENT="$(codesign --display --requirements - "$OLD_APP" 2>/dev/null | sed -n 's/^designated => //p')"
-NEW_REQUIREMENT="$(codesign --display --requirements - "$NEW_APP" 2>/dev/null | sed -n 's/^designated => //p')"
-test -n "$OLD_REQUIREMENT"
+OLD_REQUIREMENT="$(codesign --display --requirements - "$OLD_APP" 2>&1 | sed -n 's/^designated => //p')"
+NEW_REQUIREMENT="$(codesign --display --requirements - "$NEW_APP" 2>&1 | sed -n 's/^designated => //p')"
+test -n "$OLD_REQUIREMENT" || { echo "Could not read the old app's designated requirement." >&2; exit 1; }
 
 ARCHIVE="$FEED_DIR/$ARCHIVE_NAME"
 ditto -c -k --sequesterRsrc --keepParent "$NEW_APP" "$ARCHIVE"
