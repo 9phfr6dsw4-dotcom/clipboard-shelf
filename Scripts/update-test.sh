@@ -83,6 +83,15 @@ security set-keychain-settings -lut 3600 "$TEST_KEYCHAIN"
 security unlock-keychain -p "$TEST_KEYCHAIN_PASSWORD" "$TEST_KEYCHAIN"
 security import "$WORK_DIR/identity.p12" -k "$TEST_KEYCHAIN" -P "$TEST_P12_PASSWORD" -f pkcs12 -T /usr/bin/codesign >/dev/null
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$TEST_KEYCHAIN_PASSWORD" "$TEST_KEYCHAIN" >/dev/null
+# codesign finds the identity through the keychain search list, as ci-signing.sh arranges it.
+existing=()
+while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%\"}"
+    line="${line#\"}"
+    [[ -n "$line" ]] && existing+=("$line")
+done < <(security list-keychains -d user)
+security list-keychains -d user -s "$TEST_KEYCHAIN" "${existing[@]}"
 SIGN_IDENTITY="$(security find-identity -p codesigning "$TEST_KEYCHAIN" | sed -nE 's/^ *1\) ([0-9A-F]{40}) .*/\1/p')"
 test -n "$SIGN_IDENTITY" || { echo "The test signing identity wasn't created." >&2; exit 1; }
 SIGN_MODE=self-signed
