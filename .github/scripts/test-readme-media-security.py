@@ -26,18 +26,18 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         cls.runtime = (ROOT / ".github/scripts/readme-media-runtime.sh").read_text(encoding="utf-8")
 
     def test_capture_checkout_does_not_persist_credentials(self) -> None:
-        self.assertIn(
-            "      - uses: actions/checkout@v7\n        with:\n          persist-credentials: false",
+        self.assertRegex(
             self.workflow,
+            r"      - uses: actions/checkout@v\d+\n        with:\n          persist-credentials: false",
         )
 
     def test_pr_validation_runs_media_tests_without_capture_or_release_secrets(self) -> None:
         self.assertIn("  pull_request:\n", MACOS_CI.read_text(encoding="utf-8"))
         macos_ci = MACOS_CI.read_text(encoding="utf-8")
         self.assertIn("  readme-media-safety:\n", macos_ci)
-        self.assertIn(
-            "      - uses: actions/checkout@v7\n        with:\n          persist-credentials: false",
+        self.assertRegex(
             macos_ci,
+            r"      - uses: actions/checkout@v\d+\n        with:\n          persist-credentials: false",
         )
         for command in (
             "bash .github/scripts/test-readme-media-runtime.sh",
@@ -272,9 +272,12 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
 
     def test_sanitized_geometry_snapshot_is_uploaded_only_on_failure(self) -> None:
         self.assertIn("name: Upload sanitized geometry diagnostics on failure", self.workflow)
-        failure_step = self.workflow.split("name: Upload sanitized geometry diagnostics on failure", 1)[1].split(
-            "      - uses: actions/upload-artifact@v7", 1
-        )[0]
+        failure_section = self.workflow.split("name: Upload sanitized geometry diagnostics on failure", 1)[1]
+        self.assertRegex(failure_section, r"\n        uses: actions/upload-artifact@v\d+")
+        next_upload = re.search(r"\n      - uses: actions/upload-artifact@v\d+", failure_section)
+        if next_upload is None:
+            self.fail("expected the next workflow step to upload the successful media artifacts")
+        failure_step = failure_section[:next_upload.start()]
         self.assertIn("if: failure()", failure_step)
         self.assertIn("path: ${{ runner.temp }}/readme-media/diagnostics/geometry-snapshot.json", failure_step)
         self.assertIn("retention-days: 3", failure_step)
