@@ -40,6 +40,10 @@ final class ShelfModel {
     @ObservationIgnored var onSetPaused: (Bool) -> Void = { _ in }
     @ObservationIgnored var onClearRecent: () -> Void = {}
     @ObservationIgnored var onShowMenu: () -> Void = {}
+    @ObservationIgnored var onCheckForUpdates: () -> Void = {}
+    /// Shows a waiting update in the shelf. The update controller is observable, so the row appears
+    /// and goes away with it.
+    @ObservationIgnored var updates: UpdateController?
 
     private var matching: [ClipboardEntry] { history.filteredEntries(matching: query) }
     var pinned: [ClipboardEntry] { matching.filter(\.isPinned) }
@@ -65,6 +69,10 @@ struct ShelfView: View {
                 .padding(.bottom, 10)
             controls
                 .padding(.bottom, 14)
+            if let version = model.updates?.updateWaiting {
+                updateRow(version)
+                    .padding(.bottom, 14)
+            }
             list
             footer
         }
@@ -208,6 +216,30 @@ struct ShelfView: View {
             copy: { model.onCopy(entry) },
             togglePin: { model.onTogglePin(entry) }
         )
+    }
+
+    /// Shown only while Sparkle has an update waiting for the user; choosing it opens the install dialog.
+    private func updateRow(_ version: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(ShelfStyle.mint)
+                .accessibilityHidden(true)
+            Text("Version \(version) is ready")
+                .font(.system(size: 12.5))
+                .foregroundStyle(ShelfStyle.primaryText)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button("Install…") {
+                model.onCheckForUpdates()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(ShelfStyle.mint)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 10).fill(ShelfStyle.mint.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ShelfStyle.mint.opacity(0.4), lineWidth: 0.75))
     }
 
     private var footer: some View {
@@ -435,6 +467,14 @@ final class ClipboardShelfViewController: NSViewController {
         model.onShowMenu = { [weak self] in
             self?.showMoreMenu()
         }
+        model.onCheckForUpdates = { [weak self] in
+            guard let self else { return }
+            self.delegate?.clipboardShelfViewControllerCheckForUpdates(self)
+        }
+    }
+
+    func setUpdates(_ updates: UpdateController) {
+        model.updates = updates
     }
 
     func update(history: ClipboardHistory, recordingPaused: Bool) {
@@ -478,6 +518,12 @@ final class ClipboardShelfViewController: NSViewController {
         menu.addItem(clear)
         menu.addItem(.separator())
 
+        let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesChosen), keyEquivalent: "")
+        check.target = self
+        check.isEnabled = model.updates?.canCheckForUpdates ?? false
+        menu.addItem(check)
+        menu.addItem(.separator())
+
         let quit = NSMenuItem(title: "Quit Clipboard Shelf", action: #selector(quitChosen), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -495,6 +541,10 @@ final class ClipboardShelfViewController: NSViewController {
 
     @objc private func clearRecentChosen() {
         delegate?.clipboardShelfViewControllerClearRecent(self)
+    }
+
+    @objc private func checkForUpdatesChosen() {
+        delegate?.clipboardShelfViewControllerCheckForUpdates(self)
     }
 
     @objc private func quitChosen() {

@@ -1,0 +1,185 @@
+name: Release Clipboard Shelf
+
+# Runs when the macOS CI run for a push to main succeeds, and reads that run's app. The release
+# signing secrets are only used here, never by pull request checks.
+on:
+  workflow_run:
+    workflows: ["macOS CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Publish release
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One release at a time; a newer run waits instead of racing an older one.
+    concurrency:
+      group: clipboard-shelf-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      ARTIFACT: Clipboard-Shelf-${{ github.event.workflow_run.head_sha }}-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Read the version
+        id: version
+        run: |
+          read -r version build < <(python3 -c "import plistlib; d = plistlib.load(open('Resources/Info.plist', 'rb')); print(d['CFBundleShortVersionString'], d['CFBundleVersion'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Version $version (build $build)"
+      - name: Read the published feed
+        id: feed
+        run: |
+          status="$(curl -sSL -o current-appcast.xml -w '%{http_code}' "$FEED_URL")"
+          case "$status" in
+            200)
+              echo "published_build=$(python3 -I Scripts/release/sparkle_release.py feed-build current-appcast.xml)" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              rm -f current-appcast.xml
+              echo "published_build=0" >> "$GITHUB_OUTPUT"
+              echo "No feed is published yet."
+              ;;
+            *)
+              echo "Couldn't read the published feed (HTTP $status)."
+              exit 1
+              ;;
+          esac
+      - name: Check whether it's already released
+        id: existing
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+          PUBLISHED_BUILD: ${{ steps.feed.outputs.published_build }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            if [ "$PUBLISHED_BUILD" -ge "$BUILD" ]; then
+              echo "advertised=true" >> "$GITHUB_OUTPUT"
+              echo "v$VERSION is already released and in the feed; nothing to do."
+            else
+              echo "advertised=false" >> "$GITHUB_OUTPUT"
+              echo "v$VERSION is released but not in the feed yet; finishing that step."
+            fi
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "advertised=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download the app that the tested run built
+        if: steps.existing.outputs.released == 'false'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: release
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Check the download, its signing and its update key
+        if: steps.existing.outputs.released == 'false'
+        working-directory: release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          zip="Clipboard-Shelf-$VERSION.zip"
+          sha256sum -c "$zip.sha256"
+          cat signing.txt
+          mode="$(sed -n 's/^mode=//p' signing.txt)"
+          notarized="$(sed -n 's/^notarized=//p' signing.txt)"
+          case "$mode" in
+            self-signed) ;;
+            developer-id) [ "$notarized" = "yes" ] || { echo "Developer ID builds must be notarized before release."; exit 1; } ;;
+            *) echo "Releases need a real signing identity so macOS keeps Clipboard Shelf's identity; this build is $mode-signed."; exit 1 ;;
+          esac
+          unzip -p "$zip" "Clipboard Shelf.app/Contents/Info.plist" > shipped-Info.plist
+          read -r shipped_version shipped_build shipped_key < <(python3 -c "import plistlib; d = plistlib.load(open('shipped-Info.plist', 'rb')); print(d['CFBundleShortVersionString'], d['CFBundleVersion'], d['SUPublicEDKey'])")
+          [ "$shipped_version" = "$VERSION" ] && [ "$shipped_build" = "$BUILD" ]
+          signing_key="$(python3 -I ../Scripts/release/sparkle_release.py public-key --seed-env SPARKLE_PRIVATE_KEY)"
+          if [ "$signing_key" != "$shipped_key" ]; then
+            echo "The app's SUPublicEDKey doesn't match SPARKLE_PRIVATE_KEY; installed copies couldn't verify this update."
+            exit 1
+          fi
+          echo "The app trusts the release signing key."
+      - name: Sign the download and write the feed
+        if: steps.existing.outputs.released == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          tool="python3 -I Scripts/release/sparkle_release.py"
+          zip="Clipboard-Shelf-$VERSION.zip"
+          notes="docs/releases/$VERSION.md"
+          [ -f "$notes" ] || { echo "Missing $notes"; exit 1; }
+          if [ -f current-appcast.xml ]; then
+            $tool require-newer --build "$BUILD" --current-feed current-appcast.xml
+          fi
+          public_key="$(python3 -c "import plistlib; print(plistlib.load(open('release/shipped-Info.plist', 'rb'))['SUPublicEDKey'])")"
+          signature="$($tool sign --seed-env SPARKLE_PRIVATE_KEY "release/$zip")"
+          $tool verify --public-key "$public_key" "release/$zip" "$signature"
+          printf '%s\n' "$signature" > "release/$zip.sig"
+          $tool feed --app-name "Clipboard Shelf" --version "$VERSION" --build "$BUILD" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/$zip" \
+            --archive "release/$zip" --signature "$signature" --minimum-system 26.0 \
+            --notes "$notes" --output release/appcast.xml
+          $tool sign-feed --seed-env SPARKLE_PRIVATE_KEY release/appcast.xml
+          $tool verify-feed --public-key "$public_key" release/appcast.xml
+      - name: Publish the download (not yet in the feed)
+        if: steps.existing.outputs.released == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          zip="Clipboard-Shelf-$VERSION.zip"
+          notes="docs/releases/$VERSION.md"
+          gh release create "v$VERSION" "release/$zip" "release/$zip.sha256" "release/$zip.sig" release/appcast.xml \
+            --repo "$GITHUB_REPOSITORY" --target "$HEAD_SHA" --title "Clipboard Shelf $VERSION" --notes-file "$notes" --latest=false
+      - name: Check the public download, then add it to the feed
+        if: steps.existing.outputs.advertised == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          tool="python3 -I Scripts/release/sparkle_release.py"
+          zip="Clipboard-Shelf-$VERSION.zip"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION"
+          mkdir -p public
+          # Anyone can download it, logged out, and it's byte-for-byte the tested app.
+          curl -fsSL -o "public/$zip" "$base/$zip"
+          curl -fsSL -o "public/$zip.sha256" "$base/$zip.sha256"
+          curl -fsSL -o public/appcast.xml "$base/appcast.xml"
+          (cd public && sha256sum -c "$zip.sha256")
+          unzip -p "public/$zip" "Clipboard Shelf.app/Contents/Info.plist" > public/Info.plist
+          public_key="$(python3 -c "import plistlib; print(plistlib.load(open('public/Info.plist', 'rb'))['SUPublicEDKey'])")"
+          $tool verify-feed --public-key "$public_key" public/appcast.xml
+          [ "$($tool feed-build public/appcast.xml)" = "$BUILD" ]
+          # Never let an older run take the feed back: re-read what's published right now.
+          status="$(curl -sSL -o now-appcast.xml -w '%{http_code}' "$FEED_URL")"
+          if [ "$status" = "200" ]; then
+            $tool require-newer --build "$BUILD" --current-feed now-appcast.xml
+          elif [ "$status" != "404" ]; then
+            echo "Couldn't read the published feed (HTTP $status)."
+            exit 1
+          fi
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --latest
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsSL -o advertised.xml "$FEED_URL" && [ "$($tool feed-build advertised.xml)" = "$BUILD" ]; then
+              echo "The feed now offers build $BUILD."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "The feed doesn't show build $BUILD yet."
+          exit 1

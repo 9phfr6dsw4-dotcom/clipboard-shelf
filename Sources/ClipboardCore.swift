@@ -171,3 +171,15 @@ enum ClipboardSummaryText {
         pinned > 0 ? "\(recent) recent · \(pinned) pinned" : "\(recent) recent"
     }
 }
+
+/// When Clipboard Shelf may relaunch to install an update that has already downloaded.
+enum UpdateInstallPolicy {
+    /// How often the waiting installer asks again while the shelf is open.
+    static let retryInterval: TimeInterval = 15
+
+    /// The shelf is open, so the user may be using it. The update waits until it closes; quitting
+    /// Clipboard Shelf still installs the update straight away.
+    static func canInstallNow(isBusy: Bool) -> Bool {
+        !isBusy
+    }
+}

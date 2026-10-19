@@ -9,6 +9,7 @@ protocol ClipboardShelfViewControllerDelegate: AnyObject {
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecordingPaused paused: Bool)
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecentLimit limit: Int)
     func clipboardShelfViewControllerQuit(_ controller: ClipboardShelfViewController)
+    func clipboardShelfViewControllerCheckForUpdates(_ controller: ClipboardShelfViewController)
 }
 
 @MainActor
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
     private var monitorTimer: Timer?
     private var pasteboardChangeCount = 0
     private var isRecordingPaused = false
+    private var updates: UpdateController!
 
     nonisolated override init() {
         super.init()
@@ -38,6 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         popover = NSPopover()
         shelfController.delegate = self
         shelfController.update(history: history, recordingPaused: isRecordingPaused)
+        updates = UpdateController { [weak self] in self?.popover.isShown ?? false }
+        shelfController.setUpdates(updates)
         popover.behavior = .transient
         popover.animates = true
         popover.appearance = NSAppearance(named: .darkAqua)
@@ -57,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         let timer = Timer(timeInterval: 0.5, target: self, selector: #selector(checkPasteboard), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         monitorTimer = timer
+
+        updates.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -162,6 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         NSApp.terminate(nil)
     }
 
+    func clipboardShelfViewControllerCheckForUpdates(_ controller: ClipboardShelfViewController) {
+        popover.performClose(nil)
+        updates.checkForUpdates()
+    }
+
     /// How many recent items to keep: 20, 50 or 100 (chosen in the ⋯ menu).
     private var storedRecentLimit: Int {
         ClipboardHistory.validRecentLimit(UserDefaults.standard.integer(forKey: recentLimitKey))
@@ -196,6 +207,11 @@ private func runSelfTest() -> Int32 {
     }
     guard Bundle.main.url(forResource: "AppIcon", withExtension: "icns") != nil else {
         fputs("Self-test failed: app icon resource\n", stderr)
+        return 1
+    }
+    guard let frameworks = Bundle.main.privateFrameworksURL,
+          FileManager.default.fileExists(atPath: frameworks.appendingPathComponent("Sparkle.framework").path) else {
+        fputs("Self-test failed: Sparkle framework\n", stderr)
         return 1
     }
     guard Bundle.main.url(forResource: "Assets", withExtension: "car") != nil,
