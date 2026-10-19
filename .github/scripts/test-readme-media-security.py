@@ -27,7 +27,7 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
 
     def test_capture_checkout_does_not_persist_credentials(self) -> None:
         self.assertIn(
-            "      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false",
+            "      - uses: actions/checkout@v7\n        with:\n          persist-credentials: false",
             self.workflow,
         )
 
@@ -36,7 +36,7 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
         macos_ci = MACOS_CI.read_text(encoding="utf-8")
         self.assertIn("  readme-media-safety:\n", macos_ci)
         self.assertIn(
-            "      - uses: actions/checkout@v4\n        with:\n          persist-credentials: false",
+            "      - uses: actions/checkout@v7\n        with:\n          persist-credentials: false",
             macos_ci,
         )
         for command in (
@@ -273,7 +273,7 @@ class ReadmeMediaSecurityTests(unittest.TestCase):
     def test_sanitized_geometry_snapshot_is_uploaded_only_on_failure(self) -> None:
         self.assertIn("name: Upload sanitized geometry diagnostics on failure", self.workflow)
         failure_step = self.workflow.split("name: Upload sanitized geometry diagnostics on failure", 1)[1].split(
-            "      - uses: actions/upload-artifact@v4", 1
+            "      - uses: actions/upload-artifact@v7", 1
         )[0]
         self.assertIn("if: failure()", failure_step)
         self.assertIn("path: ${{ runner.temp }}/readme-media/diagnostics/geometry-snapshot.json", failure_step)
