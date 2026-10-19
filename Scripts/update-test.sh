@@ -5,7 +5,8 @@
 #   3. a correctly signed update is installed and Clipboard Shelf relaunches as the new version,
 #      with its settings kept and (for a real signing identity) the same code identity.
 # The two test copies are the packaged app with a test feed address, a throwaway signing key and
-# their own version numbers, re-signed by the same script as the release. Needs OpenSSL 3.
+# their own version numbers, re-signed with a throwaway self-signed identity made here, so both
+# copies share one identity the way a release does. No secret is needed. Needs OpenSSL 3.
 # It writes Sparkle's settings for local.clipboardshelf, so run it on CI, not on a Mac you use.
 set -euo pipefail
 
@@ -19,8 +20,6 @@ DOMAIN="local.clipboardshelf"
 MARKER_KEY="ClipboardShelf.updateTestMarker"
 PORT=8765
 FEED_URL="http://127.0.0.1:$PORT/appcast.xml"
-SIGN_MODE="${SIGN_MODE:-adhoc}"
-export SIGN_MODE
 
 test -d "$SOURCE_APP"
 if [[ -z "${SPARKLE_OPENSSL:-}" ]]; then
@@ -47,6 +46,9 @@ cleanup() {
         kill "$SERVER_PID" >/dev/null 2>&1 || true
     fi
     defaults delete "$DOMAIN" "$MARKER_KEY" >/dev/null 2>&1 || true
+    if [[ -n "${TEST_KEYCHAIN:-}" ]]; then
+        security delete-keychain "$TEST_KEYCHAIN" >/dev/null 2>&1 || true
+    fi
     rm -rf "$WORK_DIR"
     exit "$status"
 }
@@ -63,6 +65,29 @@ OLD_BUILD="$BASE_BUILD"
 NEW_BUILD="$((BASE_BUILD + 1))"
 NEW_VERSION="$BASE_VERSION.1"
 ARCHIVE_NAME="Clipboard-Shelf-$NEW_VERSION.zip"
+
+# A throwaway code-signing identity. The old and new copies must share one identity, as a release
+# does, so macOS keeps its permissions and Sparkle accepts the update. The real release certificate
+# only ever signs main builds, so this check needs no secret.
+TEST_KEYCHAIN="$WORK_DIR/update-test.keychain-db"
+TEST_KEYCHAIN_PASSWORD="$(head -c 24 /dev/urandom | base64)"
+TEST_P12_PASSWORD="$(head -c 24 /dev/urandom | base64)"
+"$SPARKLE_OPENSSL" req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -keyout "$WORK_DIR/identity.key" -out "$WORK_DIR/identity.crt" \
+    -subj "/CN=Clipboard Shelf update test" \
+    -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=codeSigning" 2>/dev/null
+"$SPARKLE_OPENSSL" pkcs12 -export -legacy -inkey "$WORK_DIR/identity.key" -in "$WORK_DIR/identity.crt" \
+    -out "$WORK_DIR/identity.p12" -passout "pass:$TEST_P12_PASSWORD"
+security create-keychain -p "$TEST_KEYCHAIN_PASSWORD" "$TEST_KEYCHAIN"
+security set-keychain-settings -lut 3600 "$TEST_KEYCHAIN"
+security unlock-keychain -p "$TEST_KEYCHAIN_PASSWORD" "$TEST_KEYCHAIN"
+security import "$WORK_DIR/identity.p12" -k "$TEST_KEYCHAIN" -P "$TEST_P12_PASSWORD" -f pkcs12 -T /usr/bin/codesign >/dev/null
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$TEST_KEYCHAIN_PASSWORD" "$TEST_KEYCHAIN" >/dev/null
+SIGN_IDENTITY="$(security find-identity -p codesigning "$TEST_KEYCHAIN" | sed -nE 's/^ *1\) ([0-9A-F]{40}) .*/\1/p')"
+test -n "$SIGN_IDENTITY" || { echo "The test signing identity wasn't created." >&2; exit 1; }
+SIGN_MODE=self-signed
+SIGN_KEYCHAIN="$TEST_KEYCHAIN"
+export SIGN_MODE SIGN_IDENTITY SIGN_KEYCHAIN
 
 make_copy() {
     local destination="$1" build="$2" version="$3"
