@@ -20,7 +20,7 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$SUBMISSION"
 
 xcrun notarytool submit "$SUBMISSION" \
     --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
-    --wait --timeout 30m --output-format plist > "$WORK_DIR/result.plist"
+    --wait --timeout 3h --output-format plist > "$WORK_DIR/result.plist"
 STATUS="$(/usr/libexec/PlistBuddy -c 'Print :status' "$WORK_DIR/result.plist")"
 SUBMISSION_ID="$(/usr/libexec/PlistBuddy -c 'Print :id' "$WORK_DIR/result.plist")"
 printf 'Notarization %s: %s\n' "$SUBMISSION_ID" "$STATUS"

@@ -14,7 +14,7 @@ jobs:
   build-and-test:
     name: Test and build Universal app
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 220
     steps:
       - uses: actions/checkout@v7
         with:
