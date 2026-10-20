@@ -28,12 +28,24 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
     var text: String
     var isPinned: Bool
     var createdAt: Date
+    /// The bundle identifier of the app that was in front when this was copied. Items saved by
+    /// older versions have none. Only the identifier is stored; the icon is looked up when drawn.
+    var sourceApp: String?
 
-    init(id: UUID = UUID(), text: String, isPinned: Bool = false, createdAt: Date = Date()) {
+    init(id: UUID = UUID(), text: String, isPinned: Bool = false, createdAt: Date = Date(), sourceApp: String? = nil) {
         self.id = id
         self.text = text
         self.isPinned = isPinned
         self.createdAt = createdAt
+        self.sourceApp = sourceApp
+    }
+
+    /// A single web address, so the shelf can show a link icon instead of a text one.
+    var looksLikeLink: Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: { $0.isWhitespace }) else { return false }
+        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else { return false }
+        return (scheme == "http" || scheme == "https") && url.host != nil
     }
 }
 
@@ -56,15 +68,20 @@ struct ClipboardHistory: Equatable {
         normalize()
     }
 
-    mutating func record(_ text: String, at date: Date = Date()) {
+    /// Adds a copy to the top. A repeated text moves up and takes the new source app; copying it
+    /// again from the shelf itself (no source) keeps the app it first came from.
+    mutating func record(_ text: String, at date: Date = Date(), sourceApp: String? = nil) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         if let index = entries.firstIndex(where: { $0.text == text }) {
             var existing = entries.remove(at: index)
             existing.createdAt = date
+            if let sourceApp {
+                existing.sourceApp = sourceApp
+            }
             entries.append(existing)
         } else {
-            entries.append(ClipboardEntry(text: text, createdAt: date))
+            entries.append(ClipboardEntry(text: text, createdAt: date, sourceApp: sourceApp))
         }
         normalize()
     }
@@ -129,9 +146,22 @@ struct ClipboardHistory: Equatable {
     }
 }
 
-/// The short times under each item: "Copied 8 minutes ago", "Pinned · Yesterday".
+/// The short times under each item: "Copied 8 minutes ago", "Pinned · Yesterday". With a source
+/// app name: "Safari · Copied 8 minutes ago", "Pinned · Mail · Yesterday".
 enum ClipboardTimeText {
-    static func copied(_ date: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+    static func copied(_ date: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current, app: String? = nil) -> String {
+        let text = copiedText(date, now: now, calendar: calendar, locale: locale)
+        guard let app else { return text }
+        return "\(app) · \(text)"
+    }
+
+    static func pinned(_ date: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current, app: String? = nil) -> String {
+        let day = pinnedDay(date, now: now, calendar: calendar, locale: locale)
+        guard let app else { return "Pinned · \(day)" }
+        return "Pinned · \(app) · \(day)"
+    }
+
+    private static func copiedText(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
         let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "Copied just now" }
         let minutes = Int(seconds / 60)
@@ -144,10 +174,10 @@ enum ClipboardTimeText {
         return "Copied \(shortDate(date, calendar: calendar, locale: locale))"
     }
 
-    static func pinned(_ date: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        if calendar.isDate(date, inSameDayAs: now) || date > now { return "Pinned · Today" }
-        if isYesterday(date, now: now, calendar: calendar) { return "Pinned · Yesterday" }
-        return "Pinned · \(shortDate(date, calendar: calendar, locale: locale))"
+    private static func pinnedDay(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        if calendar.isDate(date, inSameDayAs: now) || date > now { return "Today" }
+        if isYesterday(date, now: now, calendar: calendar) { return "Yesterday" }
+        return shortDate(date, calendar: calendar, locale: locale)
     }
 
     private static func isYesterday(_ date: Date, now: Date, calendar: Calendar) -> Bool {
@@ -181,5 +211,126 @@ enum UpdateInstallPolicy {
     /// Clipboard Shelf still installs the update straight away.
     static func canInstallNow(isBusy: Bool) -> Bool {
         !isBusy
+    }
+}
+
+/// A colour as plain numbers, so the skins can be listed and tested without any UI framework.
+struct ShelfRGB: Equatable, Sendable {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    init(hex: UInt32) {
+        red = Double((hex >> 16) & 0xFF) / 255
+        green = Double((hex >> 8) & 0xFF) / 255
+        blue = Double(hex & 0xFF) / 255
+    }
+}
+
+/// The colour waves the shelf can wear. The accent drives the highlights, the pin colour the pinned
+/// items, and the tint the dark background.
+enum ShelfSkin: String, CaseIterable, Sendable {
+    case lagoon
+    case classic
+    case grape
+    case sunset
+    case meadow
+    case rose
+
+    static let fallback = ShelfSkin.lagoon
+
+    /// A stored name if it is a known skin, otherwise Lagoon.
+    static func from(stored: String?) -> ShelfSkin {
+        guard let stored, let skin = ShelfSkin(rawValue: stored) else { return fallback }
+        return skin
+    }
+
+    var title: String {
+        switch self {
+        case .lagoon: return "Lagoon"
+        case .classic: return "Classic"
+        case .grape: return "Grape"
+        case .sunset: return "Sunset"
+        case .meadow: return "Meadow"
+        case .rose: return "Rose"
+        }
+    }
+
+    var accent: ShelfRGB {
+        switch self {
+        case .lagoon: return ShelfRGB(hex: 0x14B8A6)
+        case .classic: return ShelfRGB(hex: 0x0A84FF)
+        case .grape: return ShelfRGB(hex: 0x8B5CF6)
+        case .sunset: return ShelfRGB(hex: 0xFF6B4A)
+        case .meadow: return ShelfRGB(hex: 0x30B85E)
+        case .rose: return ShelfRGB(hex: 0xF0508C)
+        }
+    }
+
+    var pin: ShelfRGB {
+        switch self {
+        case .lagoon, .meadow: return ShelfRGB(hex: 0xF5B134)
+        case .classic: return ShelfRGB(hex: 0xFFB020)
+        case .grape, .rose: return ShelfRGB(hex: 0xFFC247)
+        case .sunset: return ShelfRGB(hex: 0xFFD166)
+        }
+    }
+
+    var tint: ShelfRGB {
+        switch self {
+        case .lagoon: return ShelfRGB(hex: 0x14282C)
+        case .classic: return ShelfRGB(hex: 0x1A2230)
+        case .grape: return ShelfRGB(hex: 0x241C33)
+        case .sunset: return ShelfRGB(hex: 0x2E1D22)
+        case .meadow: return ShelfRGB(hex: 0x1A2A21)
+        case .rose: return ShelfRGB(hex: 0x2E1C25)
+        }
+    }
+}
+
+/// Whether the shelf follows the Mac's light or dark look, or stays in one.
+enum ShelfAppearance: String, CaseIterable, Sendable {
+    case auto
+    case light
+    case dark
+
+    static func from(stored: String?) -> ShelfAppearance {
+        guard let stored, let value = ShelfAppearance(rawValue: stored) else { return .auto }
+        return value
+    }
+
+    var title: String {
+        switch self {
+        case .auto: return "Automatic"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
+/// The look settings: skin, light or dark, and whether each item shows the app it came from.
+/// Nothing is written until the user changes one.
+struct ShelfPreferences: Equatable, Sendable {
+    static let skinKey = "ClipboardShelfSkinV1"
+    static let appearanceKey = "ClipboardShelfAppearanceV1"
+    static let sourceIconsKey = "ClipboardShelfShowSourceIconsV1"
+
+    var skin = ShelfSkin.fallback
+    var appearance = ShelfAppearance.auto
+    /// On unless the user turned it off.
+    var showSourceIcons = true
+
+    static func load(from defaults: UserDefaults = .standard) -> ShelfPreferences {
+        ShelfPreferences(
+            skin: ShelfSkin.from(stored: defaults.string(forKey: skinKey)),
+            appearance: ShelfAppearance.from(stored: defaults.string(forKey: appearanceKey)),
+            showSourceIcons: defaults.object(forKey: sourceIconsKey) as? Bool ?? true
+        )
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        defaults.set(skin.rawValue, forKey: Self.skinKey)
+        defaults.set(appearance.rawValue, forKey: Self.appearanceKey)
+        defaults.set(showSourceIcons, forKey: Self.sourceIconsKey)
     }
 }

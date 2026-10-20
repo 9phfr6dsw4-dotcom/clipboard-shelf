@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.1.4"
+VERSION="1.2.0"
 BUILD_DIR="$ROOT/.build"
 DIST_DIR="$ROOT/dist"
 APP="$DIST_DIR/Clipboard Shelf.app"
