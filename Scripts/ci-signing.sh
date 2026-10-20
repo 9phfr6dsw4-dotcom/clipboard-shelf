@@ -65,12 +65,12 @@ done < <(security list-keychains -d user)
 security list-keychains -d user -s "$KEYCHAIN" "${existing[@]}"
 
 # Without -v so a self-signed certificate (valid for signing, not trusted by macOS) is listed too.
-IDENTITY="$(security find-identity -p codesigning "$KEYCHAIN" | sed -nE 's/^ *1\) ([0-9A-F]{40}) .*/\1/p')"
+IDENTITY="$(security find-identity -p codesigning "$KEYCHAIN" | sed -nE 's/^ *1\) ([0-9A-F]{40}) .*/\1/p' | sed -n 1p)"
 if [[ -z "$IDENTITY" ]]; then
     echo "The certificate in the secrets has no code-signing identity." >&2
     exit 1
 fi
-NAME="$(security find-identity -p codesigning "$KEYCHAIN" | sed -nE 's/^ *1\) [0-9A-F]{40} "([^"]*)".*/\1/p')"
+NAME="$(security find-identity -p codesigning "$KEYCHAIN" | sed -nE 's/^ *1\) [0-9A-F]{40} "([^"]*)".*/\1/p' | sed -n 1p)"
 if [[ "$MODE" == "developer-id" && "$NAME" != "Developer ID Application:"* ]]; then
     echo "The Developer ID secret holds \"$NAME\", not a Developer ID Application certificate." >&2
     exit 1
