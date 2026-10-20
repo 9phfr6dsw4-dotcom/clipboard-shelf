@@ -179,6 +179,99 @@ private func testUpdateSettingsAreInInfoPlist() {
     expect(Int(info["CFBundleVersion"] as? String ?? "") != nil, "Sparkle compares whole-number builds")
 }
 
+private func testSourceAppIsRememberedAndOldItemsStillLoad() throws {
+    var history = ClipboardHistory(maxRecentItems: 20)
+    history.record("From Safari", at: Date(timeIntervalSince1970: 1), sourceApp: "com.apple.Safari")
+    history.record("From nowhere", at: Date(timeIntervalSince1970: 2))
+    expect(history.entries.first(where: { $0.text == "From Safari" })?.sourceApp == "com.apple.Safari", "a copy remembers the app it came from")
+    expect(history.entries.first(where: { $0.text == "From nowhere" })?.sourceApp == nil, "a copy with no known source stays without one")
+
+    history.record("From Safari", at: Date(timeIntervalSince1970: 3))
+    expect(
+        history.entries.first(where: { $0.text == "From Safari" })?.sourceApp == "com.apple.Safari",
+        "copying an item again from the shelf keeps the app it first came from"
+    )
+    history.record("From Safari", at: Date(timeIntervalSince1970: 4), sourceApp: "com.apple.Notes")
+    expect(
+        history.entries.first(where: { $0.text == "From Safari" })?.sourceApp == "com.apple.Notes",
+        "copying the same text from another app credits the newer app"
+    )
+
+    let restored = try ClipboardHistory.decode(data: history.encoded(), maxRecentItems: 20)
+    expect(restored.entries == history.entries, "the source app survives saving and loading")
+
+    // History saved by an earlier version has no sourceApp at all.
+    let oldJSON = """
+    [{"id":"7B1E4E0A-3C54-4A52-9B52-0B7A55E4C0A1","text":"Old item","isPinned":true,"createdAt":700000000}]
+    """
+    let old = try ClipboardHistory.decode(data: Data(oldJSON.utf8), maxRecentItems: 20)
+    expect(old.entries.count == 1 && old.entries[0].text == "Old item", "history from an earlier version still loads")
+    expect(old.entries[0].isPinned && old.entries[0].sourceApp == nil, "an older item keeps its pin and has no source app")
+}
+
+private func testLinksAreRecognised() {
+    expect(ClipboardEntry(text: "https://github.com").looksLikeLink, "a web address is a link")
+    expect(ClipboardEntry(text: "  http://example.com/a?b=1  ").looksLikeLink, "spaces around a web address are ignored")
+    expect(!ClipboardEntry(text: "see https://github.com now").looksLikeLink, "a sentence with a link in it is text")
+    expect(!ClipboardEntry(text: "github.com").looksLikeLink, "a bare domain is text")
+    expect(!ClipboardEntry(text: "ftp://example.com").looksLikeLink, "only web addresses count as links")
+    expect(!ClipboardEntry(text: "Please send the notes.").looksLikeLink, "plain text is not a link")
+}
+
+private func testTimeTextNamesTheSourceApp() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    let locale = Locale(identifier: "en_US")
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
+    let eightMinutesAgo = now.addingTimeInterval(-8 * 60)
+    expect(
+        ClipboardTimeText.copied(eightMinutesAgo, now: now, calendar: calendar, locale: locale, app: "Safari") == "Safari · Copied 8 minutes ago",
+        "a recent item names its app before the time"
+    )
+    expect(
+        ClipboardTimeText.pinned(now.addingTimeInterval(-600), now: now, calendar: calendar, locale: locale, app: "Mail") == "Pinned · Mail · Today",
+        "a pinned item names its app between Pinned and the day"
+    )
+    expect(
+        ClipboardTimeText.pinned(now.addingTimeInterval(-26 * 3600), now: now, calendar: calendar, locale: locale, app: "Mail") == "Pinned · Mail · Yesterday",
+        "a pinned item from yesterday names its app too"
+    )
+}
+
+private func testSkinsAndLookSettings() {
+    expect(ShelfSkin.allCases.count == 6, "there are six skins")
+    expect(Set(ShelfSkin.allCases.map { $0.rawValue }).count == 6, "every skin has its own name")
+    expect(Set(ShelfSkin.allCases.map { $0.title }).count == 6, "every skin has its own title")
+    let accents = ShelfSkin.allCases.map { $0.accent }
+    expect(accents.indices.allSatisfy { index in !accents[(index + 1)...].contains(accents[index]) }, "every skin has its own accent colour")
+    expect(ShelfSkin.from(stored: nil) == .lagoon, "no stored skin means Lagoon")
+    expect(ShelfSkin.from(stored: "grape") == .grape, "a stored skin is used")
+    expect(ShelfSkin.from(stored: "retired-skin") == .lagoon, "an unknown stored skin falls back to Lagoon")
+    expect(ShelfAppearance.from(stored: nil) == .auto, "no stored appearance means Automatic")
+    expect(ShelfAppearance.from(stored: "dark") == .dark, "a stored appearance is used")
+    expect(ShelfAppearance.from(stored: "sepia") == .auto, "an unknown appearance falls back to Automatic")
+    expect(ShelfRGB(hex: 0xFF0000) == ShelfRGB(hex: 0xFF0000) && ShelfRGB(hex: 0x14B8A6).green > ShelfRGB(hex: 0x14B8A6).red, "hex colours convert to numbers")
+
+    let suite = "local.clipboardshelf.tests.\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suite) else {
+        expect(false, "a throwaway preference domain should be available")
+        return
+    }
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    let fresh = ShelfPreferences.load(from: defaults)
+    expect(fresh.skin == .lagoon && fresh.appearance == .auto, "a fresh install starts with Lagoon and Automatic")
+    expect(fresh.showSourceIcons, "source app icons are on by default")
+    expect(defaults.dictionaryRepresentation().keys.allSatisfy { !$0.hasPrefix("ClipboardShelf") }, "loading the settings writes nothing")
+
+    var chosen = fresh
+    chosen.skin = .rose
+    chosen.appearance = .light
+    chosen.showSourceIcons = false
+    chosen.save(to: defaults)
+    expect(ShelfPreferences.load(from: defaults) == chosen, "the chosen look is remembered")
+}
+
 @main
 struct CoreTestRunner {
     static func main() {
@@ -190,6 +283,15 @@ struct CoreTestRunner {
         testTimeAndSummaryText()
         testUpdateInstallPolicyWaitsOnlyWhileTheShelfIsOpen()
         testUpdateSettingsAreInInfoPlist()
+        testLinksAreRecognised()
+        testTimeTextNamesTheSourceApp()
+        testSkinsAndLookSettings()
+        do {
+            try testSourceAppIsRememberedAndOldItemsStillLoad()
+        } catch {
+            failures += 1
+            fputs("FAIL: source app round trip threw \(error)\n", stderr)
+        }
         do {
             try testClearRecentKeepsPinsAndArchiveRoundTrips()
         } catch {

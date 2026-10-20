@@ -15,15 +15,17 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/9phfr6dsw4-dotcom/clipboard-shelf?style=flat-square" alt="MIT License"></a>
 </p>
 
-<p align="center"><img src="docs/images/clipboard-shelf-popover.png" width="420" alt="Clipboard Shelf: search, All and Pinned, a pause button, pinned items with gold pins, and recent items with their copy times"></p>
+<p align="center"><img src="docs/images/clipboard-shelf-popover.png" width="420" alt="Clipboard Shelf: search, All and Pinned, pinned items with gold pins, recent items with the app each came from, and a pause button"></p>
 
 ## Features
 
 - **Everything you copy, one click away.** Click the clipboard icon in the menu bar to see the text you've copied recently, newest first, with how long ago you copied it ("Copied 8 minutes ago"). Click an item to copy it again.
 - **Pin what you reuse.** Pinned items sit at the top with a gold pin and never fall off the list. Switch between **All** and **Pinned**.
+- **See where it came from.** Each new copy shows the icon and name of the app you copied it from. It's on by default; **⋯ → Show Source App Icons** turns it off.
+- **Pick a skin.** Six colour waves (Lagoon, Classic, Grape, Sunset, Meadow, Rose) from **⋯ → Skin**, and Light, Dark or Automatic from **⋯ → Appearance**.
 - **Search as you type** through everything on the shelf.
 - **Keep 20, 50 or 100 recent items**, chosen from the ⋯ menu. Pins don't count toward the limit.
-- **Pause anytime.** The round pause button stops saving new copies (the menu-bar icon changes so you can tell), and **Clear recent** empties the list while keeping your pins.
+- **Pause anytime.** The Pause button stops saving new copies (the menu-bar icon changes so you can tell), and **Clear recent** empties the list while keeping your pins.
 - **Private by design.** Items marked as concealed, temporary or auto-generated (for example by password managers, or text EchoFlow pastes for you) are skipped, and nothing is saved while Apple Passwords or Keychain Access is in front.
 - **Quiet.** It lives in the menu bar, with no Dock icon and no windows to manage.
 

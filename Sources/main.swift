@@ -10,6 +10,9 @@ protocol ClipboardShelfViewControllerDelegate: AnyObject {
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setRecentLimit limit: Int)
     func clipboardShelfViewControllerQuit(_ controller: ClipboardShelfViewController)
     func clipboardShelfViewControllerCheckForUpdates(_ controller: ClipboardShelfViewController)
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setSkin skin: ShelfSkin)
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setAppearance appearance: ShelfAppearance)
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setShowSourceIcons show: Bool)
 }
 
 @MainActor
@@ -25,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
     private var pasteboardChangeCount = 0
     private var isRecordingPaused = false
     private var updates: UpdateController!
+    private var preferences = ShelfPreferences.load()
 
     nonisolated override init() {
         super.init()
@@ -44,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         shelfController.setUpdates(updates)
         popover.behavior = .transient
         popover.animates = true
-        popover.appearance = NSAppearance(named: .darkAqua)
+        applyPreferences()
         popover.contentSize = NSSize(width: ShelfStyle.width, height: ShelfStyle.height)
         popover.contentViewController = shelfController
 
@@ -80,12 +84,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         button.toolTip = description
     }
 
+    /// Whether the shelf draws dark: the Appearance choice, or the Mac's own setting when Automatic.
+    private var shelfIsDark: Bool {
+        switch preferences.appearance {
+        case .dark:
+            return true
+        case .light:
+            return false
+        case .auto:
+            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+    }
+
+    /// Pushes the skin, the light or dark look and the source-icon switch to the shelf and popover.
+    private func applyPreferences() {
+        let dark = shelfIsDark
+        popover.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        shelfController.update(preferences: preferences, isDark: dark)
+    }
+
     @objc private func togglePopover(_ sender: NSStatusBarButton) {
         if popover.isShown {
             popover.performClose(sender)
             return
         }
         shelfController.update(history: history, recordingPaused: isRecordingPaused)
+        applyPreferences()
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -98,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         guard !isRecordingPaused else { return }
 
         let types = Set(pasteboard.types?.map { $0.rawValue } ?? [])
+        // The app in front when the copy is noticed is taken as its source (checked twice a second).
         let frontmostBundleIdentifier = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         if ClipboardPrivacy.shouldSkip(
             types: types,
@@ -109,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
 
         guard let text = pasteboard.string(forType: .string) else { return }
 
-        history.record(text)
+        history.record(text, sourceApp: frontmostBundleIdentifier)
         saveHistory()
         shelfController.update(history: history, recordingPaused: isRecordingPaused)
     }
@@ -173,6 +198,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         updates.checkForUpdates()
     }
 
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setSkin skin: ShelfSkin) {
+        preferences.skin = skin
+        preferences.save()
+        applyPreferences()
+    }
+
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setAppearance appearance: ShelfAppearance) {
+        preferences.appearance = appearance
+        preferences.save()
+        applyPreferences()
+    }
+
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setShowSourceIcons show: Bool) {
+        preferences.showSourceIcons = show
+        preferences.save()
+        applyPreferences()
+    }
+
     /// How many recent items to keep: 20, 50 or 100 (chosen in the ⋯ menu).
     private var storedRecentLimit: Int {
         ClipboardHistory.validRecentLimit(UserDefaults.standard.integer(forKey: recentLimitKey))
@@ -234,6 +277,11 @@ private func runSelfTest() -> Int32 {
         frontmostBundleIdentifier: "com.apple.keychainaccess"
     ) else {
         fputs("Self-test failed: password app bundle identifiers\n", stderr)
+        return 1
+    }
+    guard ShelfSkin.allCases.count == 6, ShelfSkin.from(stored: "nonsense") == .lagoon,
+          ShelfPreferences().showSourceIcons else {
+        fputs("Self-test failed: skins and look defaults\n", stderr)
         return 1
     }
     print("Clipboard Shelf bundle self-test passed.")
