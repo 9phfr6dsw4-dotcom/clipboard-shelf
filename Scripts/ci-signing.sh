@@ -71,11 +71,12 @@ if [[ -z "$IDENTITY" ]]; then
     exit 1
 fi
 NAME="$(security find-identity -p codesigning "$KEYCHAIN" | sed -nE 's/^ *1\) [0-9A-F]{40} "([^"]*)".*/\1/p' | sed -n 1p)"
+[[ -n "$NAME" ]] && echo "::add-mask::$NAME"
 if [[ "$MODE" == "developer-id" && "$NAME" != "Developer ID Application:"* ]]; then
-    echo "The Developer ID secret holds \"$NAME\", not a Developer ID Application certificate." >&2
+    echo "The Developer ID secret does not hold a Developer ID Application certificate." >&2
     exit 1
 fi
-echo "Signing as \"$NAME\" ($MODE), certificate SHA-1 $IDENTITY."
+echo "Signing ($MODE), certificate SHA-1 $IDENTITY."
 
 write_env SIGN_MODE "$MODE"
 write_env SIGN_IDENTITY "$IDENTITY"
