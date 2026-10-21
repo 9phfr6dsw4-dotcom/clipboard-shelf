@@ -622,6 +622,10 @@ final class ClipboardShelfViewController: NSViewController {
         sourceIcons.target = self
         sourceIcons.state = model.preferences.showSourceIcons ? .on : .off
         menu.addItem(sourceIcons)
+        let appIcon = NSMenuItem(title: "App Icon Follows Skin", action: #selector(toggleAppIconChosen), keyEquivalent: "")
+        appIcon.target = self
+        appIcon.state = model.preferences.appIconFollowsSkin ? .on : .off
+        menu.addItem(appIcon)
         menu.addItem(.separator())
 
         let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesChosen), keyEquivalent: "")
@@ -684,6 +688,10 @@ final class ClipboardShelfViewController: NSViewController {
 
     @objc private func toggleSourceIconsChosen() {
         delegate?.clipboardShelfViewController(self, setShowSourceIcons: !model.preferences.showSourceIcons)
+    }
+
+    @objc private func toggleAppIconChosen() {
+        delegate?.clipboardShelfViewController(self, setAppIconFollowsSkin: !model.preferences.appIconFollowsSkin)
     }
 
     @objc private func recentLimitChosen(_ sender: NSMenuItem) {
