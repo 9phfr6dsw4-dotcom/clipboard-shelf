@@ -15,6 +15,7 @@ APP="$WORK_DIR/Clipboard Shelf.app"
 BINARY="$APP/Contents/MacOS/ClipboardShelf"
 ICON_FILE="$APP/Icon"$'\r'
 cleanup() {
+    pkill -x ClipboardShelf >/dev/null 2>&1 || true
     defaults delete "$DOMAIN" "$SHOWN_KEY" >/dev/null 2>&1 || true
     rm -rf "$WORK_DIR"
 }
@@ -47,7 +48,26 @@ test "$(defaults read "$DOMAIN" "$SHOWN_KEY")" = "rose"
 
 echo "4. The app still runs with the custom icon on."
 "$BINARY" --self-test
-open -n -W -g "$APP" --args --self-test
+# A real launch through Launch Services, as from Finder: the app must start and keep running.
+pkill -x ClipboardShelf >/dev/null 2>&1 || true
+open -n -g "$APP"
+STARTED=""
+for _ in {1..20}; do
+    if pgrep -x ClipboardShelf >/dev/null 2>&1; then STARTED="yes"; break; fi
+    sleep 0.5
+done
+if [[ -z "$STARTED" ]]; then
+    echo "The app did not start from Launch Services with the icon on." >&2
+    exit 1
+fi
+sleep 2
+pgrep -x ClipboardShelf >/dev/null || { echo "The app quit right after starting with the icon on." >&2; exit 1; }
+pkill -x ClipboardShelf
+for _ in {1..20}; do
+    if ! pgrep -x ClipboardShelf >/dev/null 2>&1; then break; fi
+    sleep 0.5
+done
+echo "   It starts from Launch Services and keeps running."
 codesign --verify --deep --strict "$APP" 2>&1 | sed 's/^/   codesign with the icon: /' || true
 CLEAN="$WORK_DIR/clean/Clipboard Shelf.app"
 mkdir -p "$WORK_DIR/clean"
