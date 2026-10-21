@@ -303,9 +303,9 @@ private func testOldDefaultSkinMovesToClassic() {
 
 private func testFinderIconSkin() {
     var preferences = ShelfPreferences()
-    expect(preferences.customIconSkin == .classic, "the default skin shows its own icon in Finder")
+    expect(preferences.customIconSkin == nil, "Classic, the default, uses the app's own icon, so no custom icon")
     preferences.skin = .lagoon
-    expect(preferences.customIconSkin == nil, "Lagoon uses the app's own icon, so no custom icon")
+    expect(preferences.customIconSkin == .lagoon, "Lagoon shows its own icon in Finder")
     preferences.skin = .grape
     preferences.appIconFollowsSkin = false
     expect(preferences.customIconSkin == nil, "with the switch off the app's own icon stays")

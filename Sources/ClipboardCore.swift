@@ -239,8 +239,9 @@ enum ShelfSkin: String, CaseIterable, Sendable {
 
     /// The skin a fresh install wears (Classic from 1.3.0; it was Lagoon before).
     static let fallback = ShelfSkin.classic
-    /// The skin the app's own icon is drawn in, so it needs no custom icon in Finder.
-    static let builtInIcon = ShelfSkin.lagoon
+    /// The skin the app's own icon is drawn in, so it needs no custom icon in Finder
+    /// (Classic from 1.3.1; it was Lagoon in 1.3.0).
+    static let builtInIcon = ShelfSkin.classic
 
     /// A stored name if it is a known skin, otherwise Classic.
     static func from(stored: String?) -> ShelfSkin {

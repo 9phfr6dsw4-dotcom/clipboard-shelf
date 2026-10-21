@@ -4,7 +4,7 @@
 #   2. an update whose signature doesn't match is downloaded but never installed;
 #   3. a correctly signed update is installed and Clipboard Shelf relaunches as the new version,
 #      with its settings kept and (for a real signing identity) the same code identity.
-# The installed copy wears a skin icon in Finder throughout (the app puts it on itself at launch),
+# The installed copy wears the Grape icon in Finder throughout (the app puts it on itself at launch),
 # so this also shows that the custom icon doesn't stop an update, and that it comes back after one.
 # The two test copies are the packaged app with a test feed address, a throwaway signing key and
 # their own version numbers, re-signed with a throwaway self-signed identity made here, so both
@@ -48,6 +48,9 @@ cleanup() {
         kill "$SERVER_PID" >/dev/null 2>&1 || true
     fi
     defaults delete "$DOMAIN" "$MARKER_KEY" >/dev/null 2>&1 || true
+    defaults delete "$DOMAIN" ClipboardShelfSkinV1 >/dev/null 2>&1 || true
+    defaults delete "$DOMAIN" ClipboardShelfLookDefaultsVersion >/dev/null 2>&1 || true
+    defaults delete "$DOMAIN" ClipboardShelfFinderIconShownV1 >/dev/null 2>&1 || true
     if [[ -n "${TEST_KEYCHAIN:-}" ]]; then
         security delete-keychain "$TEST_KEYCHAIN" >/dev/null 2>&1 || true
     fi
@@ -191,6 +194,9 @@ quit_app() {
 ditto "$OLD_APP" "$INSTALLED_APP"
 MARKER="kept-$(date +%s)"
 defaults write "$DOMAIN" "$MARKER_KEY" -string "$MARKER"
+# A skin other than Classic, the app's own icon, so the app wears a custom icon in Finder.
+defaults write "$DOMAIN" ClipboardShelfSkinV1 -string grape
+defaults write "$DOMAIN" ClipboardShelfLookDefaultsVersion -int 2
 defaults write "$DOMAIN" SUAutomaticallyUpdate -bool true
 # A check just happened as far as the hourly schedule knows, so only the launch check can find
 # the update quickly.
@@ -223,7 +229,7 @@ quit_app
 test "$(installed_build)" = "$OLD_BUILD"
 echo "   The update was downloaded and refused."
 
-# The earlier launches put the default skin's icon on the installed copy.
+# The earlier launches put the Grape icon on the installed copy.
 if [[ ! -f "$INSTALLED_APP/Icon"$'\r' ]]; then
     echo "The installed copy should be wearing its skin icon in Finder by now." >&2
     exit 1

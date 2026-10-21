@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.3.0"
+VERSION="1.3.1"
 BUILD_DIR="$ROOT/.build"
 DIST_DIR="$ROOT/dist"
 APP="$DIST_DIR/Clipboard Shelf.app"
@@ -36,9 +36,9 @@ cp "$ROOT/Resources/AppIcon-1024.png" "$RESOURCES_DIR/AppIcon-1024.png"
 python3 "$ROOT/Scripts/test_icon_package.py" "$ROOT/Resources/AppIcon-1024.png" "$APP"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/Resources/Acknowledgements.txt" "$RESOURCES_DIR/Acknowledgements.txt"
-# One icon per skin (but Lagoon, the app's own icon), put on the app in Finder when that skin is chosen.
+# One icon per skin (but Classic, the app's own icon), put on the app in Finder when that skin is chosen.
 mkdir -p "$RESOURCES_DIR/SkinIcons"
-for skin in classic grape sunset meadow rose; do
+for skin in lagoon grape sunset meadow rose; do
   test -s "$ROOT/Resources/SkinIcons/icon-$skin.png" || { echo "Resources/SkinIcons/icon-$skin.png is missing" >&2; exit 1; }
   cp "$ROOT/Resources/SkinIcons/icon-$skin.png" "$RESOURCES_DIR/SkinIcons/icon-$skin.png"
 done
