@@ -4,6 +4,8 @@
 #   2. an update whose signature doesn't match is downloaded but never installed;
 #   3. a correctly signed update is installed and Clipboard Shelf relaunches as the new version,
 #      with its settings kept and (for a real signing identity) the same code identity.
+# The installed copy wears a skin icon in Finder throughout (the app puts it on itself at launch),
+# so this also shows that the custom icon doesn't stop an update, and that it comes back after one.
 # The two test copies are the packaged app with a test feed address, a throwaway signing key and
 # their own version numbers, re-signed with a throwaway self-signed identity made here, so both
 # copies share one identity the way a release does. No secret is needed. Needs OpenSSL 3.
@@ -221,6 +223,13 @@ quit_app
 test "$(installed_build)" = "$OLD_BUILD"
 echo "   The update was downloaded and refused."
 
+# The earlier launches put the default skin's icon on the installed copy.
+if [[ ! -f "$INSTALLED_APP/Icon"$'\r' ]]; then
+    echo "The installed copy should be wearing its skin icon in Finder by now." >&2
+    exit 1
+fi
+echo "   The installed copy wears its skin icon in Finder."
+
 echo "3. A signed update installs and Clipboard Shelf relaunches."
 cp "$WORK_DIR/appcast-good.xml" "$FEED_DIR/appcast.xml"
 defaults write "$DOMAIN" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
@@ -249,14 +258,28 @@ if [[ "$(realpath "$RUNNING_PATH")" != "$(realpath "$INSTALLED_APP/Contents/MacO
     printf 'The relaunched app runs from %s, not the updated app.\n' "$RUNNING_PATH" >&2
     exit 1
 fi
-codesign --verify --deep --strict "$INSTALLED_APP"
+for _ in {1..20}; do
+    if [[ -f "$INSTALLED_APP/Icon"$'\r' ]]; then break; fi
+    sleep 0.5
+done
+if [[ ! -f "$INSTALLED_APP/Icon"$'\r' ]]; then
+    echo "The updated app didn't put its skin icon back in Finder." >&2
+    exit 1
+fi
+# The Finder icon sits outside what the signature covers, so check the update without it.
+VERIFY_APP="$WORK_DIR/verify/$APP_NAME.app"
+mkdir -p "$WORK_DIR/verify"
+ditto "$INSTALLED_APP" "$VERIFY_APP"
+rm -f "$VERIFY_APP/Icon"$'\r'
+xattr -c "$VERIFY_APP"
+codesign --verify --deep --strict "$VERIFY_APP"
 test "$(defaults read "$DOMAIN" "$MARKER_KEY")" = "$MARKER"
-echo "   Installed build $NEW_BUILD, relaunched (process $NEW_PID), settings kept."
+echo "   Installed build $NEW_BUILD, relaunched (process $NEW_PID), settings kept, skin icon back."
 
 echo "Code identity (what macOS privacy permissions are tied to):"
 echo "   old: $OLD_REQUIREMENT"
 echo "   new: $NEW_REQUIREMENT"
-if codesign --verify -R="$OLD_REQUIREMENT" "$INSTALLED_APP" >/dev/null 2>&1; then
+if codesign --verify -R="$OLD_REQUIREMENT" "$VERIFY_APP" >/dev/null 2>&1; then
     IDENTITY_KEPT="yes"
 else
     IDENTITY_KEPT="no"
@@ -272,7 +295,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         echo "### Sparkle update test ($SIGN_MODE signing)"
         echo "- Automatic checks off: no check made"
         echo "- Wrong signature: downloaded, refused"
-        echo "- Signed update: build $OLD_BUILD → $NEW_BUILD installed, relaunched, settings kept"
+        echo "- Signed update: build $OLD_BUILD → $NEW_BUILD installed over a copy wearing a skin icon, relaunched, settings kept, skin icon back"
         echo "- Old requirement: \`$OLD_REQUIREMENT\`"
         echo "- New requirement: \`$NEW_REQUIREMENT\`"
         echo "- Update meets the old app's requirement (permissions can carry over): **$IDENTITY_KEPT**"

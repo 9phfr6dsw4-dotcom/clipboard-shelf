@@ -237,9 +237,12 @@ enum ShelfSkin: String, CaseIterable, Sendable {
     case meadow
     case rose
 
-    static let fallback = ShelfSkin.lagoon
+    /// The skin a fresh install wears (Classic from 1.3.0; it was Lagoon before).
+    static let fallback = ShelfSkin.classic
+    /// The skin the app's own icon is drawn in, so it needs no custom icon in Finder.
+    static let builtInIcon = ShelfSkin.lagoon
 
-    /// A stored name if it is a known skin, otherwise Lagoon.
+    /// A stored name if it is a known skin, otherwise Classic.
     static func from(stored: String?) -> ShelfSkin {
         guard let stored, let skin = ShelfSkin(rawValue: stored) else { return fallback }
         return skin
@@ -308,23 +311,35 @@ enum ShelfAppearance: String, CaseIterable, Sendable {
     }
 }
 
-/// The look settings: skin, light or dark, and whether each item shows the app it came from.
-/// Nothing is written until the user changes one.
+/// The look settings: skin, light or dark, whether each item shows the app it came from, and
+/// whether the app's icon in Finder follows the skin. Nothing is written until the user changes one.
 struct ShelfPreferences: Equatable, Sendable {
     static let skinKey = "ClipboardShelfSkinV1"
     static let appearanceKey = "ClipboardShelfAppearanceV1"
     static let sourceIconsKey = "ClipboardShelfShowSourceIconsV1"
+    static let appIconKey = "ClipboardShelfAppIconFollowsSkinV1"
+    /// Written with every save from 1.3.0. Before it, saving any look setting also wrote the skin,
+    /// so a stored Lagoon without this marker was the old default rather than a choice.
+    static let defaultsVersionKey = "ClipboardShelfLookDefaultsVersion"
+    static let defaultsVersion = 2
 
     var skin = ShelfSkin.fallback
     var appearance = ShelfAppearance.auto
     /// On unless the user turned it off.
     var showSourceIcons = true
+    /// On unless the user turned it off.
+    var appIconFollowsSkin = true
 
     static func load(from defaults: UserDefaults = .standard) -> ShelfPreferences {
-        ShelfPreferences(
-            skin: ShelfSkin.from(stored: defaults.string(forKey: skinKey)),
+        var skin = ShelfSkin.from(stored: defaults.string(forKey: skinKey))
+        if skin == .lagoon, defaults.object(forKey: defaultsVersionKey) == nil {
+            skin = .fallback
+        }
+        return ShelfPreferences(
+            skin: skin,
             appearance: ShelfAppearance.from(stored: defaults.string(forKey: appearanceKey)),
-            showSourceIcons: defaults.object(forKey: sourceIconsKey) as? Bool ?? true
+            showSourceIcons: defaults.object(forKey: sourceIconsKey) as? Bool ?? true,
+            appIconFollowsSkin: defaults.object(forKey: appIconKey) as? Bool ?? true
         )
     }
 
@@ -332,5 +347,12 @@ struct ShelfPreferences: Equatable, Sendable {
         defaults.set(skin.rawValue, forKey: Self.skinKey)
         defaults.set(appearance.rawValue, forKey: Self.appearanceKey)
         defaults.set(showSourceIcons, forKey: Self.sourceIconsKey)
+        defaults.set(appIconFollowsSkin, forKey: Self.appIconKey)
+        defaults.set(Self.defaultsVersion, forKey: Self.defaultsVersionKey)
+    }
+
+    /// The skin whose icon the app should show in Finder, or nil for the app's own icon.
+    var customIconSkin: ShelfSkin? {
+        appIconFollowsSkin && skin != ShelfSkin.builtInIcon ? skin : nil
     }
 }

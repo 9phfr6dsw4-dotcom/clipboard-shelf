@@ -22,7 +22,7 @@
 - **Everything you copy, one click away.** Click the clipboard icon in the menu bar to see the text you've copied recently, newest first, with how long ago you copied it ("Copied 8 minutes ago"). Click an item to copy it again.
 - **Pin what you reuse.** Pinned items sit at the top with a gold pin and never fall off the list. Switch between **All** and **Pinned**.
 - **See where it came from.** Each new copy shows the icon and name of the app you copied it from. It's on by default; **⋯ → Show Source App Icons** turns it off.
-- **Pick a skin.** Six colour waves (Lagoon, Classic, Grape, Sunset, Meadow, Rose) from **⋯ → Skin**, and Light, Dark or Automatic from **⋯ → Appearance**.
+- **Pick a skin.** Six colour waves (Classic, Lagoon, Grape, Sunset, Meadow, Rose) from **⋯ → Skin**, and Light, Dark or Automatic from **⋯ → Appearance**. The app's icon in Finder and Launchpad changes colour with the skin; **⋯ → App Icon Follows Skin** turns that off.
 - **Search as you type** through everything on the shelf.
 - **Keep 20, 50 or 100 recent items**, chosen from the ⋯ menu. Pins don't count toward the limit.
 - **Pause anytime.** The Pause button stops saving new copies (the menu-bar icon changes so you can tell), and **Clear recent** empties the list while keeping your pins.

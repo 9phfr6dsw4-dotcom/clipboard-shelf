@@ -13,6 +13,36 @@ protocol ClipboardShelfViewControllerDelegate: AnyObject {
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setSkin skin: ShelfSkin)
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setAppearance appearance: ShelfAppearance)
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setShowSourceIcons show: Bool)
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setAppIconFollowsSkin follows: Bool)
+}
+
+/// Puts the skin's icon on the app itself, as seen in Finder, Launchpad and Spotlight (a menu-bar
+/// app has no Dock icon). It is the same custom icon Get Info can paste on an app. An update
+/// replaces the whole app, which brings back the app's own icon, so this runs at every launch.
+@MainActor
+enum FinderIcon {
+    /// The skin last put on the app, so a launch with nothing to change writes nothing.
+    static let shownKey = "ClipboardShelfFinderIconShownV1"
+
+    /// Shows the skin's icon, or the app's own icon for nil. Returns false if the app couldn't
+    /// change it (for example an app it may not write to); the app's own icon then stays.
+    @discardableResult
+    static func show(_ skin: ShelfSkin?, defaults: UserDefaults = .standard) -> Bool {
+        let appPath = Bundle.main.bundlePath
+        let hasCustomIcon = FileManager.default.fileExists(atPath: appPath + "/Icon\r")
+        guard let skin else {
+            defaults.removeObject(forKey: shownKey)
+            return !hasCustomIcon || NSWorkspace.shared.setIcon(nil, forFile: appPath, options: [])
+        }
+        if hasCustomIcon, defaults.string(forKey: shownKey) == skin.rawValue { return true }
+        guard let url = Bundle.main.url(forResource: "icon-\(skin.rawValue)", withExtension: "png", subdirectory: "SkinIcons"),
+              let image = NSImage(contentsOf: url),
+              NSWorkspace.shared.setIcon(image, forFile: appPath, options: []) else {
+            return false
+        }
+        defaults.set(skin.rawValue, forKey: shownKey)
+        return true
+    }
 }
 
 @MainActor
@@ -59,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         updateStatusItemAppearance()
+        FinderIcon.show(preferences.customIconSkin)
 
         let pasteboard = NSPasteboard.general
         pasteboardChangeCount = pasteboard.changeCount
@@ -202,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         preferences.skin = skin
         preferences.save()
         applyPreferences()
+        FinderIcon.show(preferences.customIconSkin)
     }
 
     func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setAppearance appearance: ShelfAppearance) {
@@ -214,6 +246,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ClipboardShelfViewCont
         preferences.showSourceIcons = show
         preferences.save()
         applyPreferences()
+    }
+
+    func clipboardShelfViewController(_ controller: ClipboardShelfViewController, setAppIconFollowsSkin follows: Bool) {
+        preferences.appIconFollowsSkin = follows
+        preferences.save()
+        applyPreferences()
+        FinderIcon.show(preferences.customIconSkin)
     }
 
     /// How many recent items to keep: 20, 50 or 100 (chosen in the ⋯ menu).
@@ -279,10 +318,17 @@ private func runSelfTest() -> Int32 {
         fputs("Self-test failed: password app bundle identifiers\n", stderr)
         return 1
     }
-    guard ShelfSkin.allCases.count == 6, ShelfSkin.from(stored: "nonsense") == .lagoon,
-          ShelfPreferences().showSourceIcons else {
+    guard ShelfSkin.allCases.count == 6, ShelfSkin.from(stored: "nonsense") == .classic,
+          ShelfPreferences().showSourceIcons, ShelfPreferences().appIconFollowsSkin else {
         fputs("Self-test failed: skins and look defaults\n", stderr)
         return 1
+    }
+    for skin in ShelfSkin.allCases where skin != ShelfSkin.builtInIcon {
+        guard let url = Bundle.main.url(forResource: "icon-\(skin.rawValue)", withExtension: "png", subdirectory: "SkinIcons"),
+              let data = try? Data(contentsOf: url), data.starts(with: [0x89, 0x50, 0x4E, 0x47]), data.count > 10_000 else {
+            fputs("Self-test failed: Finder icon for the \(skin.title) skin\n", stderr)
+            return 1
+        }
     }
     print("Clipboard Shelf bundle self-test passed.")
     return 0
@@ -290,6 +336,18 @@ private func runSelfTest() -> Int32 {
 
 if CommandLine.arguments.contains("--self-test") {
     exit(runSelfTest())
+}
+
+// Used by Scripts/finder-icon-test.sh: shows a skin's icon (or "none" for the app's own) on this
+// copy of the app through the same code the app uses, then exits.
+if let index = CommandLine.arguments.firstIndex(of: "--show-finder-icon"), index + 1 < CommandLine.arguments.count {
+    let name = CommandLine.arguments[index + 1]
+    let skin = name == "none" ? nil : ShelfSkin(rawValue: name)
+    guard name == "none" || skin != nil else {
+        fputs("Unknown skin \(name)\n", stderr)
+        exit(2)
+    }
+    exit(MainActor.assumeIsolated { FinderIcon.show(skin) } ? 0 : 1)
 }
 
 let app = NSApplication.shared

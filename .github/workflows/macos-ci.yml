@@ -57,6 +57,9 @@ jobs:
       - name: Build and verify app bundle
         run: bash Scripts/build.sh
 
+      - name: Put a skin icon on the app in Finder and take it off
+        run: bash Scripts/finder-icon-test.sh
+
       - name: Update an older build to a newer one through Sparkle
         run: bash Scripts/update-test.sh
 
