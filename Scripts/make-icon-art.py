@@ -3,11 +3,12 @@
 
 Writes these files from one geometry:
 - Resources/AppIcon.icon/Assets/clipboard.png: the transparent glyph layer for Icon Composer
-  (macOS draws the rounded square, shadow and glass; the gradient is the .icon's own fill).
+  (macOS draws the rounded square, shadow and glass; the gradient is the .icon's own fill, which
+  must match BUILT_IN's gradient below).
 - Resources/AppIcon-1024.png: the flat icon (the .icns fallback) on the macOS grid.
 - docs/images/clipboard-shelf-icon.png: the same flat icon, for the README.
 - Resources/SkinIcons/icon-<skin>.png: the flat icon in each other skin's colours, which the app
-  puts on itself in Finder when that skin is chosen (Lagoon is the app's own icon).
+  puts on itself in Finder when that skin is chosen (Classic, the default, is the app's own icon).
 """
 
 from __future__ import annotations
@@ -20,16 +21,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SS = 2  # draw at 2x, then reduce, for smooth edges
 SIZE = 1024
 
-TOP = (0x1F, 0xC4, 0xB0)      # teal, lit from above
-BOTTOM = (0x07, 0x62, 0x70)   # deep teal
-# Each other skin's gradient, lit from above, built around its accent colour (ShelfSkin.accent).
+# Each skin's gradient, lit from above, built around its accent colour (ShelfSkin.accent).
 SKIN_GRADIENTS = {
     "classic": ((0x3A, 0xA2, 0xFF), (0x0A, 0x4B, 0xA6)),
+    "lagoon": ((0x1F, 0xC4, 0xB0), (0x07, 0x62, 0x70)),
     "grape": ((0xA4, 0x80, 0xFA), (0x4A, 0x2A, 0x9A)),
     "sunset": ((0xFF, 0x8C, 0x5E), (0xB0, 0x38, 0x2C)),
     "meadow": ((0x4E, 0xCF, 0x7A), (0x14, 0x6C, 0x38)),
     "rose": ((0xF7, 0x72, 0xA2), (0x9C, 0x22, 0x56)),
 }
+BUILT_IN = "classic"  # the app's own icon: ShelfSkin.builtInIcon
+TOP, BOTTOM = SKIN_GRADIENTS[BUILT_IN]
 GOLD_TOP = (0xF8, 0xB9, 0x3C)
 GOLD_BOTTOM = (0xD9, 0x8A, 0x12)
 WHITE = (255, 255, 255, 255)
@@ -111,7 +113,11 @@ def main() -> None:
     flat.save(ROOT / "docs/images/clipboard-shelf-icon.png")
     skin_dir = ROOT / "Resources/SkinIcons"
     skin_dir.mkdir(exist_ok=True)
+    for stale in skin_dir.glob("icon-*.png"):
+        stale.unlink()
     for name, (top, bottom) in SKIN_GRADIENTS.items():
+        if name == BUILT_IN:
+            continue
         flat_icon(art, top, bottom).save(skin_dir / f"icon-{name}.png", optimize=True)
     print("Wrote", layer_path, "the flat icons and the skin icons.")
 
